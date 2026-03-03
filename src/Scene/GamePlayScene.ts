@@ -18,12 +18,14 @@ export class GamePlayScene {
     this.renderer = new THREE.WebGLRenderer({
       antialias: !this.isCoarsePointerDevice && window.devicePixelRatio <= 1.5,
       powerPreference: 'high-performance',
+      precision: 'highp',
     });
     this.renderer.setPixelRatio(
-      Math.min(window.devicePixelRatio, this.isCoarsePointerDevice ? 1 : 1.5),
+      Math.min(window.devicePixelRatio, this.isCoarsePointerDevice ? 1.5 : 2),
     );
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.shadowMap.enabled = !this.isCoarsePointerDevice;
+    this.renderer.shadowMap.enabled = GameConfig.enableShadow;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.domElement.style.touchAction = 'none';
     this.container.append(this.renderer.domElement);
 

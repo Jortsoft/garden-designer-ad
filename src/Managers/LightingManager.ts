@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { GameConfig } from './GameConfig';
 
 export type LightSettingKey =
     | 'ambientIntensity'
@@ -37,7 +38,11 @@ const CONTROL_LOOKUP = new Map(
 
 export class LightingManager {
     private readonly scene: THREE.Scene;
-    private readonly ambientLight = new THREE.AmbientLight('#ffffff', DEFAULT_LIGHT_VALUES.ambientIntensity);
+    private readonly ambientLight = new THREE.HemisphereLight(
+        '#e6f6ff',
+        '#d7c3a0',
+        DEFAULT_LIGHT_VALUES.ambientIntensity,
+    );
     private readonly directionalLight = new THREE.DirectionalLight(
         '#ffffff',
         DEFAULT_LIGHT_VALUES.sunIntensity,
@@ -45,7 +50,15 @@ export class LightingManager {
 
     constructor(scene: THREE.Scene) {
         this.scene = scene;
-        this.directionalLight.castShadow = true;
+        this.directionalLight.castShadow = GameConfig.enableShadow;
+
+        if (GameConfig.enableShadow) {
+            this.directionalLight.shadow.mapSize.set(2048, 2048);
+            this.directionalLight.shadow.bias = -0.0002;
+            this.directionalLight.shadow.normalBias = 0.02;
+            this.configureShadowCamera();
+        }
+
         this.syncDirectionalPosition();
     }
 
@@ -111,5 +124,21 @@ export class LightingManager {
             DEFAULT_LIGHT_VALUES.sunY,
             DEFAULT_LIGHT_VALUES.sunZ,
         );
+    }
+
+    private configureShadowCamera() {
+        const shadowCamera = this.directionalLight.shadow.camera;
+
+        if (!(shadowCamera instanceof THREE.OrthographicCamera)) {
+            return;
+        }
+
+        shadowCamera.left = -8;
+        shadowCamera.right = 8;
+        shadowCamera.top = 8;
+        shadowCamera.bottom = -8;
+        shadowCamera.near = 0.5;
+        shadowCamera.far = 24;
+        shadowCamera.updateProjectionMatrix();
     }
 }

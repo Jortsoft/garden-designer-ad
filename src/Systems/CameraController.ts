@@ -3,11 +3,12 @@ import { GameConfig } from '../Managers/GameConfig';
 
 const KEYBOARD_PAN_SPEED = 3.2;
 const DRAG_PAN_SPEED = 0.0032;
-const WHEEL_ZOOM_SPEED = 0.01;
-const PINCH_ZOOM_SPEED = 0.01;
+const WHEEL_ZOOM_SPEED = 0.004;
+const PINCH_ZOOM_SPEED = 0.004;
+const LOOK_SENSITIVITY = 0.005;
 const MIN_CAMERA_HEIGHT = 0.8;
-const MAX_CAMERA_HEIGHT = 6.5;
-const MOUSE_PAN_BUTTON = 2;
+const MOUSE_PAN_BUTTON = 0;
+const MOUSE_LOOK_BUTTON = 2;
 const MAX_PITCH = Math.PI / 2 - 0.05;
 
 type ScreenPointBlocker = (screenX: number, screenY: number) => boolean;
@@ -28,6 +29,7 @@ export class CameraController {
     private readonly isDebugEnabled = GameConfig.debugMode;
 
     private isMousePanning = false;
+    private isMouseLooking = false;
     private activeTouchPanId: number | null = null;
     private lastPinchDistance = 0;
     private yaw = 0;
@@ -45,6 +47,8 @@ export class CameraController {
 
     initialize() {
         this.applyDefaultCameraPose();
+        this.applyLandscapeDefaultZoomIfNeeded();
+        this.clampPanPosition();
         this.syncCameraAngles();
 
         if (this.isDebugEnabled) {
@@ -89,6 +93,7 @@ export class CameraController {
 
         this.moveDirection.normalize();
         this.camera.position.addScaledVector(this.moveDirection, KEYBOARD_PAN_SPEED * deltaSeconds);
+        this.clampPanPosition();
         this.logCameraPositionIfDebug();
     }
 
@@ -137,6 +142,95 @@ export class CameraController {
         return this.keyStates.get(code) === true;
     }
 
+    private clampPanPosition() {
+        const lookDirection = this.camera.getWorldDirection(this.lookDirection);
+
+        if (lookDirection.y >= -Number.EPSILON) {
+            return;
+        }
+
+        const groundDistance = -this.camera.position.y / lookDirection.y;
+        const currentGroundX = this.camera.position.x + lookDirection.x * groundDistance;
+        const currentGroundZ = this.camera.position.z + lookDirection.z * groundDistance;
+        const panBounds = this.getPanBounds();
+        const clampedGroundX = THREE.MathUtils.clamp(
+            currentGroundX,
+            panBounds.minX,
+            panBounds.maxX,
+        );
+        const clampedGroundZ = THREE.MathUtils.clamp(
+            currentGroundZ,
+            panBounds.minZ,
+            panBounds.maxZ,
+        );
+
+        this.camera.position.x = clampedGroundX - lookDirection.x * groundDistance;
+        this.camera.position.z = clampedGroundZ - lookDirection.z * groundDistance;
+    }
+
+    private getPanBounds() {
+        const referenceGroundDistance = this.getDefaultGroundDistance();
+        const { dirX, dirZ } = GameConfig.defaultCameraPosition;
+
+        return {
+            minX: GameConfig.MaxLeftMove + dirX * referenceGroundDistance,
+            maxX: GameConfig.MaxRightMove + dirX * referenceGroundDistance,
+            minZ: GameConfig.MaxTopMove + dirZ * referenceGroundDistance,
+            maxZ: GameConfig.MaxDownMove + dirZ * referenceGroundDistance,
+        };
+    }
+
+    private getDefaultGroundDistance() {
+        const { y, dirY } = GameConfig.defaultCameraPosition;
+
+        if (Math.abs(dirY) <= Number.EPSILON) {
+            return 0;
+        }
+
+        return -y / dirY;
+    }
+
+    private applyLandscapeDefaultZoomIfNeeded() {
+        if (!this.isLandscapeMode()) {
+            return;
+        }
+
+        const lookDirection = this.camera.getWorldDirection(this.lookDirection);
+
+        if (lookDirection.y >= -Number.EPSILON) {
+            return;
+        }
+
+        const currentGroundDistance = -this.camera.position.y / lookDirection.y;
+        const targetGroundDistance = THREE.MathUtils.clamp(
+            GameConfig.LandscapeDefaultZoomLevel,
+            GameConfig.MaxZoomInLevel,
+            this.getCurrentMaxZoomOutLevel(),
+        );
+        const zoomDelta = currentGroundDistance - targetGroundDistance;
+
+        if (zoomDelta === 0) {
+            return;
+        }
+
+        this.camera.position.addScaledVector(lookDirection, zoomDelta);
+    }
+
+    private getCurrentMaxZoomOutLevel() {
+        if (!this.isLandscapeMode()) {
+            return GameConfig.MaxZoomOutLevel;
+        }
+
+        return Math.min(
+            GameConfig.MaxZoomOutLevel,
+            GameConfig.LandscapeDefaultZoomLevel,
+        );
+    }
+
+    private isLandscapeMode() {
+        return window.innerWidth > window.innerHeight;
+    }
+
     private applyPanFromScreenDelta(deltaX: number, deltaY: number) {
         if (deltaX === 0 && deltaY === 0) {
             return;
@@ -148,6 +242,7 @@ export class CameraController {
 
         this.camera.position.addScaledVector(this.horizontalRight, -deltaX * panDistance);
         this.camera.position.addScaledVector(this.horizontalForward, deltaY * panDistance);
+        this.clampPanPosition();
         this.logCameraPositionIfDebug();
     }
 
@@ -158,26 +253,25 @@ export class CameraController {
 
         const lookDirection = this.camera.getWorldDirection(this.lookDirection);
 
-        if (Math.abs(lookDirection.y) < Number.EPSILON) {
+        if (lookDirection.y >= -Number.EPSILON) {
             return;
         }
 
-        const currentHeight = this.camera.position.y;
-        const unclampedHeight = currentHeight + lookDirection.y * zoomDelta;
-        const targetHeight = THREE.MathUtils.clamp(
-            unclampedHeight,
-            MIN_CAMERA_HEIGHT,
-            MAX_CAMERA_HEIGHT,
+        const currentGroundDistance = -this.camera.position.y / lookDirection.y;
+        const targetGroundDistance = THREE.MathUtils.clamp(
+            currentGroundDistance - zoomDelta,
+            GameConfig.MaxZoomInLevel,
+            this.getCurrentMaxZoomOutLevel(),
         );
+        const appliedZoomDelta = currentGroundDistance - targetGroundDistance;
 
-        if (targetHeight === currentHeight) {
+        if (appliedZoomDelta === 0) {
             return;
         }
 
-        const clampedZoomDelta = (targetHeight - currentHeight) / lookDirection.y;
-
-        this.camera.position.addScaledVector(lookDirection, clampedZoomDelta);
+        this.camera.position.addScaledVector(lookDirection, appliedZoomDelta);
         this.logCameraPositionIfDebug();
+        this.logCameraZoomIfDebug();
     }
 
     private getTouchDistance() {
@@ -226,11 +320,31 @@ export class CameraController {
         this.logCameraPosition();
     }
 
+    private logCameraZoomIfDebug() {
+        if (!this.isDebugEnabled) {
+            return;
+        }
+
+        this.logCameraZoomLevel();
+    }
+
     private logCameraPosition() {
         const { x, y, z } = this.camera.position;
 
         console.log(
             `Debug camera position: x=${x.toFixed(3)}, y=${y.toFixed(3)}, z=${z.toFixed(3)}`,
+        );
+    }
+
+    private logCameraZoomLevel() {
+        const lookDirection = this.camera.getWorldDirection(this.lookDirection);
+        const distanceToGroundPlane =
+            lookDirection.y < -Number.EPSILON
+                ? -this.camera.position.y / lookDirection.y
+                : Number.POSITIVE_INFINITY;
+
+        console.log(
+            `Debug camera zoom: height=${this.camera.position.y.toFixed(3)}, groundDistance=${distanceToGroundPlane.toFixed(3)}`,
         );
     }
 
@@ -250,12 +364,21 @@ export class CameraController {
         }
 
         if (event.pointerType === 'mouse') {
-            if (event.button !== MOUSE_PAN_BUTTON) {
+            if (event.button === MOUSE_PAN_BUTTON) {
+                event.preventDefault();
+                this.isMousePanning = true;
+                this.pointerPosition.set(event.clientX, event.clientY);
+                this.tryCapturePointer(event.pointerId);
+
+                return;
+            }
+
+            if (event.button !== MOUSE_LOOK_BUTTON || !this.isDebugEnabled) {
                 return;
             }
 
             event.preventDefault();
-            this.isMousePanning = true;
+            this.isMouseLooking = true;
             this.pointerPosition.set(event.clientX, event.clientY);
             this.tryCapturePointer(event.pointerId);
 
@@ -284,7 +407,7 @@ export class CameraController {
 
     private readonly handlePointerMove = (event: PointerEvent) => {
         if (event.pointerType === 'mouse') {
-            if (!this.isMousePanning) {
+            if (!this.isMousePanning && !this.isMouseLooking) {
                 return;
             }
 
@@ -294,7 +417,21 @@ export class CameraController {
             const deltaY = event.clientY - this.pointerPosition.y;
 
             this.pointerPosition.set(event.clientX, event.clientY);
-            this.applyPanFromScreenDelta(deltaX, deltaY);
+
+            if (this.isMousePanning) {
+                this.applyPanFromScreenDelta(deltaX, deltaY);
+
+                return;
+            }
+
+            this.yaw -= deltaX * LOOK_SENSITIVITY;
+            this.pitch -= deltaY * LOOK_SENSITIVITY;
+            this.pitch = THREE.MathUtils.clamp(this.pitch, -MAX_PITCH, MAX_PITCH);
+            this.applyCameraRotation();
+
+            if (this.isDebugEnabled) {
+                this.logCameraOrientation();
+            }
 
             return;
         }
@@ -337,6 +474,13 @@ export class CameraController {
         if (event.pointerType === 'mouse') {
             if (event.button === MOUSE_PAN_BUTTON) {
                 this.isMousePanning = false;
+                this.tryReleasePointer(event.pointerId);
+
+                return;
+            }
+
+            if (event.button === MOUSE_LOOK_BUTTON) {
+                this.isMouseLooking = false;
                 this.tryReleasePointer(event.pointerId);
             }
 
@@ -394,6 +538,7 @@ export class CameraController {
     private readonly handleWindowBlur = () => {
         this.keyStates.clear();
         this.isMousePanning = false;
+        this.isMouseLooking = false;
         this.activeTouchPanId = null;
         this.lastPinchDistance = 0;
         this.touchPointers.clear();

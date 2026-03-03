@@ -11,6 +11,14 @@ export interface GameConfigModel {
         dirY: number;
         dirZ: number;
     },
+    LandscapeDefaultZoomLevel: number;
+    MaxZoomInLevel: number;
+    MaxZoomOutLevel: number;
+    MaxLeftMove: number;
+    MaxRightMove: number;
+    MaxTopMove: number;
+    MaxDownMove: number;
+    enableShadow: boolean;
     postProcessingData: {
         exposure: number;
     }

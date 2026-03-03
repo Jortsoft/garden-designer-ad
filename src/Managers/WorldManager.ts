@@ -7,7 +7,7 @@ import { CameraController } from '../Systems/CameraController';
 
 export class WorldManager {
     private readonly root = new THREE.Group();
-    private readonly ground = new Ground();
+    private readonly ground: Ground;
     private readonly scene: THREE.Scene;
     private readonly lightingManager: LightingManager;
     private readonly postProcessingManager: PostProcessingManager;
@@ -22,6 +22,7 @@ export class WorldManager {
     ) {
         this.scene = scene;
         this.camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
+        this.ground = new Ground(renderer.capabilities.getMaxAnisotropy());
         this.lightingManager = new LightingManager(this.scene);
         this.postProcessingManager = new PostProcessingManager(
             renderer,

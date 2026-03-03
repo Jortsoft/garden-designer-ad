@@ -1,17 +1,20 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { GameConfig } from '../Managers/GameConfig';
 
 const GROUND_MODEL_PATH = 'assets/gltf/ground2.glb';
 const TARGET_GROUND_SIZE = 6;
 
 export class Ground extends THREE.Group {
   private readonly loader = new GLTFLoader();
+  private readonly maxTextureAnisotropy: number;
   private isLoaded = false;
   private isLoading = false;
 
-  constructor() {
+  constructor(maxTextureAnisotropy: number) {
     super();
     this.name = 'Ground';
+    this.maxTextureAnisotropy = maxTextureAnisotropy;
   }
 
   load() {
@@ -42,8 +45,14 @@ export class Ground extends THREE.Group {
   private prepareModel(model: THREE.Object3D) {
     model.traverse((child) => {
       if (child instanceof THREE.Mesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
+        child.castShadow = GameConfig.enableShadow;
+        child.receiveShadow = GameConfig.enableShadow;
+
+        if (!child.geometry.attributes.normal) {
+          child.geometry.computeVertexNormals();
+        }
+
+        this.prepareMaterial(child.material);
       }
     });
 
@@ -68,5 +77,51 @@ export class Ground extends THREE.Group {
     if (Number.isFinite(normalizedBounds.min.y)) {
       model.position.y -= normalizedBounds.min.y;
     }
+  }
+
+  private prepareMaterial(
+    material: THREE.Material | THREE.Material[],
+  ) {
+    if (Array.isArray(material)) {
+      for (const entry of material) {
+        this.prepareMaterial(entry);
+      }
+
+      return;
+    }
+
+    if (material instanceof THREE.MeshStandardMaterial) {
+      material.dithering = true;
+      this.prepareTexture(material.map, true);
+      this.prepareTexture(material.normalMap);
+      this.prepareTexture(material.roughnessMap);
+      this.prepareTexture(material.metalnessMap);
+      this.prepareTexture(material.aoMap);
+      this.prepareTexture(material.emissiveMap, true);
+      material.needsUpdate = true;
+    }
+  }
+
+  private prepareTexture(
+    texture: THREE.Texture | null,
+    isColorTexture = false,
+  ) {
+    if (!texture) {
+      return;
+    }
+
+    texture.anisotropy = this.maxTextureAnisotropy;
+    texture.minFilter = THREE.LinearMipmapLinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+
+    if (!(texture instanceof THREE.CompressedTexture)) {
+      texture.generateMipmaps = true;
+    }
+
+    if (isColorTexture) {
+      texture.colorSpace = THREE.SRGBColorSpace;
+    }
+
+    texture.needsUpdate = true;
   }
 }
