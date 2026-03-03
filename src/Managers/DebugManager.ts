@@ -1,62 +1,100 @@
 import * as THREE from 'three';
 import { GameConfig } from './GameConfig';
+import { LIGHT_CONTROLS, LightingManager } from './LightingManager';
+import type { LightSettingKey } from './LightingManager';
+import { POST_PROCESSING_CONTROLS, PostProcessingManager } from './PostProcessingManager';
+import type { PostProcessingSettingKey } from './PostProcessingManager';
 
-const LOOK_SENSITIVITY = 0.005;
-const MOVE_SPEED = 2;
-const MAX_PITCH = Math.PI / 2 - 0.05;
 const FPS_SAMPLE_WINDOW = 0.25;
-const FPS_PANEL_WIDTH = 256;
-const FPS_PANEL_HEIGHT = 96;
-const FPS_PANEL_DISTANCE = 1.5;
-const FPS_PANEL_WORLD_HEIGHT = 0.18;
-const FPS_PANEL_MARGIN = 0.06;
+const PANEL_WIDTH = 360;
+const PANEL_HEADER_HEIGHT = 92;
+const SECTION_TITLE_HEIGHT = 28;
+const SECTION_TITLE_BASELINE_OFFSET = 12;
+const SECTION_GAP = 8;
+const PANEL_FOOTER_PADDING = 20;
+const PANEL_MARGIN = 16;
+const PANEL_MAX_VIEWPORT_WIDTH_RATIO = 0.6;
+const PANEL_MAX_VIEWPORT_HEIGHT_RATIO = 0.72;
+const SLIDER_ROW_HEIGHT = 40;
+const SLIDER_LABEL_Y_OFFSET = 8;
+const SLIDER_TRACK_X = 20;
+const SLIDER_TRACK_WIDTH = PANEL_WIDTH - 40;
+const SLIDER_TRACK_HEIGHT = 10;
+const SLIDER_INTERACTION_HEIGHT = 24;
+const TOGGLE_BUTTON_WIDTH = 92;
+const TOGGLE_BUTTON_HEIGHT = 32;
+const TOGGLE_BUTTON_MARGIN_RIGHT = 18;
+const TOGGLE_BUTTON_TOP = 16;
+const HIDDEN_PANEL_WIDTH = 132;
+const HIDDEN_PANEL_HEIGHT = 48;
+const HIDDEN_BUTTON_PADDING = 8;
 
 export class DebugManager {
     private readonly inputElement: HTMLElement;
-    private readonly camera: THREE.PerspectiveCamera;
-    private readonly keyStates = new Map<string, boolean>();
-    private readonly pointerPosition = new THREE.Vector2();
-    private readonly moveDirection = new THREE.Vector3();
-    private readonly forward = new THREE.Vector3();
-    private readonly right = new THREE.Vector3();
-    private readonly upAxis = new THREE.Vector3(0, 1, 0);
-    private readonly rotationEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+    private readonly renderer: THREE.WebGLRenderer;
+    private readonly lightingManager: LightingManager;
+    private readonly postProcessingManager: PostProcessingManager;
     private readonly isEnabled = GameConfig.debugMode;
-    private readonly fpsCanvas: HTMLCanvasElement;
-    private readonly fpsContext: CanvasRenderingContext2D | null;
-    private readonly fpsTexture: THREE.CanvasTexture | null;
-    private readonly fpsSprite: THREE.Sprite | null;
+    private readonly overlayScene = new THREE.Scene();
+    private readonly overlayCamera = new THREE.OrthographicCamera(0, 1, 0, 1, 0, 10);
+    private readonly overlayCanvas: HTMLCanvasElement;
+    private readonly overlayContext: CanvasRenderingContext2D | null;
+    private readonly overlayTexture: THREE.CanvasTexture | null;
+    private readonly overlayPanel:
+        | THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>
+        | null;
 
-    private isRotating = false;
-    private yaw = 0;
-    private pitch = 0;
+    private activeSlider:
+        | { domain: 'post'; key: PostProcessingSettingKey }
+        | { domain: 'light'; key: LightSettingKey }
+        | null = null;
     private fpsFrameCount = 0;
     private fpsElapsedTime = 0;
+    private displayedFps = GameConfig.Fps;
+    private isWindowVisible = true;
+    private panelScreenX = 0;
+    private panelScreenY = 0;
+    private panelScreenWidth = 0;
+    private panelScreenHeight = 0;
 
-    constructor(camera: THREE.PerspectiveCamera, inputElement: HTMLElement) {
-        this.camera = camera;
+    constructor(
+        inputElement: HTMLElement,
+        renderer: THREE.WebGLRenderer,
+        lightingManager: LightingManager,
+        postProcessingManager: PostProcessingManager,
+    ) {
         this.inputElement = inputElement;
-        this.fpsCanvas = document.createElement('canvas');
-        this.fpsCanvas.width = FPS_PANEL_WIDTH;
-        this.fpsCanvas.height = FPS_PANEL_HEIGHT;
-        this.fpsContext = this.fpsCanvas.getContext('2d');
+        this.renderer = renderer;
+        this.lightingManager = lightingManager;
+        this.postProcessingManager = postProcessingManager;
+        this.overlayCanvas = document.createElement('canvas');
+        this.overlayCanvas.width = this.getCurrentPanelWidth();
+        this.overlayCanvas.height = this.getCurrentPanelHeight();
+        this.overlayContext = this.overlayCanvas.getContext('2d');
+        this.overlayCamera.position.z = 1;
 
-        if (this.fpsContext) {
-            this.fpsTexture = new THREE.CanvasTexture(this.fpsCanvas);
-            this.fpsTexture.colorSpace = THREE.SRGBColorSpace;
+        if (this.overlayContext) {
+            this.overlayTexture = new THREE.CanvasTexture(this.overlayCanvas);
+            this.overlayTexture.colorSpace = THREE.SRGBColorSpace;
 
-            const fpsMaterial = new THREE.SpriteMaterial({
-                map: this.fpsTexture,
+            const overlayMaterial = new THREE.MeshBasicMaterial({
+                map: this.overlayTexture,
                 transparent: true,
                 depthTest: false,
                 depthWrite: false,
+                side: THREE.DoubleSide,
             });
+            overlayMaterial.toneMapped = false;
 
-            this.fpsSprite = new THREE.Sprite(fpsMaterial);
-            this.fpsSprite.renderOrder = 999;
+            this.overlayPanel = new THREE.Mesh(
+                new THREE.PlaneGeometry(1, 1),
+                overlayMaterial,
+            );
+            this.overlayPanel.renderOrder = 999;
+            this.overlayScene.add(this.overlayPanel);
         } else {
-            this.fpsTexture = null;
-            this.fpsSprite = null;
+            this.overlayTexture = null;
+            this.overlayPanel = null;
         }
     }
 
@@ -65,16 +103,15 @@ export class DebugManager {
             return;
         }
 
-        this.syncCameraAngles();
-        this.attachFpsCounter();
-        this.logCameraPosition();
+        this.updateViewport(
+            this.inputElement.clientWidth || window.innerWidth,
+            this.inputElement.clientHeight || window.innerHeight,
+        );
+        this.drawOverlay();
 
         this.inputElement.addEventListener('pointerdown', this.handlePointerDown);
-        this.inputElement.addEventListener('contextmenu', this.handleContextMenu);
         window.addEventListener('pointermove', this.handlePointerMove);
         window.addEventListener('pointerup', this.handlePointerUp);
-        window.addEventListener('keydown', this.handleKeyDown);
-        window.addEventListener('keyup', this.handleKeyUp);
         window.addEventListener('blur', this.handleWindowBlur);
     }
 
@@ -84,42 +121,19 @@ export class DebugManager {
         }
 
         this.updateFpsCounter(deltaSeconds);
-        this.moveDirection.set(0, 0, 0);
+    }
 
-        this.forward.set(0, 0, -1).applyAxisAngle(this.upAxis, this.yaw);
-        this.right.set(1, 0, 0).applyAxisAngle(this.upAxis, this.yaw);
-
-        if (this.isKeyActive('KeyW')) {
-            this.moveDirection.add(this.forward);
-        }
-
-        if (this.isKeyActive('KeyS')) {
-            this.moveDirection.sub(this.forward);
-        }
-
-        if (this.isKeyActive('KeyD')) {
-            this.moveDirection.add(this.right);
-        }
-
-        if (this.isKeyActive('KeyA')) {
-            this.moveDirection.sub(this.right);
-        }
-
-        if (this.isKeyActive('KeyE')) {
-            this.moveDirection.add(this.upAxis);
-        }
-
-        if (this.isKeyActive('KeyQ')) {
-            this.moveDirection.sub(this.upAxis);
-        }
-
-        if (this.moveDirection.lengthSq() === 0) {
+    render() {
+        if (!this.isEnabled || !this.overlayPanel) {
             return;
         }
 
-        this.moveDirection.normalize();
-        this.camera.position.addScaledVector(this.moveDirection, MOVE_SPEED * deltaSeconds);
-        this.logCameraPosition();
+        const previousAutoClear = this.renderer.autoClear;
+
+        this.renderer.autoClear = false;
+        this.renderer.clearDepth();
+        this.renderer.render(this.overlayScene, this.overlayCamera);
+        this.renderer.autoClear = previousAutoClear;
     }
 
     dispose() {
@@ -128,62 +142,55 @@ export class DebugManager {
         }
 
         this.inputElement.removeEventListener('pointerdown', this.handlePointerDown);
-        this.inputElement.removeEventListener('contextmenu', this.handleContextMenu);
         window.removeEventListener('pointermove', this.handlePointerMove);
         window.removeEventListener('pointerup', this.handlePointerUp);
-        window.removeEventListener('keydown', this.handleKeyDown);
-        window.removeEventListener('keyup', this.handleKeyUp);
         window.removeEventListener('blur', this.handleWindowBlur);
 
-        if (this.fpsSprite?.parent === this.camera) {
-            this.camera.remove(this.fpsSprite);
+        if (this.overlayPanel) {
+            this.overlayPanel.geometry.dispose();
+            this.overlayPanel.material.dispose();
+            this.overlayScene.remove(this.overlayPanel);
         }
 
-        if (this.fpsSprite) {
-            this.fpsSprite.material.dispose();
-        }
-
-        this.fpsTexture?.dispose();
+        this.overlayTexture?.dispose();
     }
 
-    updateViewport() {
-        if (!this.isEnabled) {
+    updateViewport(width: number, height: number) {
+        if (!this.isEnabled || !this.overlayPanel) {
             return;
         }
 
-        this.updateFpsCounterLayout();
-    }
+        const currentPanelWidth = this.getCurrentPanelWidth();
+        const currentPanelHeight = this.getCurrentPanelHeight();
+        const panelScale = Math.min(
+            (width * PANEL_MAX_VIEWPORT_WIDTH_RATIO) / currentPanelWidth,
+            (height * PANEL_MAX_VIEWPORT_HEIGHT_RATIO) / currentPanelHeight,
+            1,
+        );
+        const panelDisplayWidth = currentPanelWidth * panelScale;
+        const panelDisplayHeight = currentPanelHeight * panelScale;
 
-    private syncCameraAngles() {
-        this.rotationEuler.setFromQuaternion(this.camera.quaternion, 'YXZ');
-        this.pitch = this.rotationEuler.x;
-        this.yaw = this.rotationEuler.y;
-    }
+        this.overlayCamera.left = -width * 0.5;
+        this.overlayCamera.right = width * 0.5;
+        this.overlayCamera.top = height * 0.5;
+        this.overlayCamera.bottom = -height * 0.5;
+        this.overlayCamera.updateProjectionMatrix();
 
-    private applyCameraRotation() {
-        this.rotationEuler.set(this.pitch, this.yaw, 0, 'YXZ');
-        this.camera.quaternion.setFromEuler(this.rotationEuler);
-    }
+        this.panelScreenWidth = panelDisplayWidth;
+        this.panelScreenHeight = panelDisplayHeight;
+        this.panelScreenX = width - PANEL_MARGIN - panelDisplayWidth;
+        this.panelScreenY = PANEL_MARGIN;
 
-    private isKeyActive(code: string) {
-        return this.keyStates.get(code) === true;
-    }
-
-    private attachFpsCounter() {
-        if (!this.fpsSprite) {
-            return;
-        }
-
-        if (this.fpsSprite.parent !== this.camera) {
-            this.camera.add(this.fpsSprite);
-        }
-
-        this.updateFpsCounterLayout();
-        this.drawFpsCounter(GameConfig.Fps);
+        this.overlayPanel.scale.set(panelDisplayWidth, panelDisplayHeight, 1);
+        this.overlayPanel.position.set(
+            width * 0.5 - PANEL_MARGIN - panelDisplayWidth * 0.5,
+            height * 0.5 - PANEL_MARGIN - panelDisplayHeight * 0.5,
+            0,
+        );
     }
 
     private updateFpsCounter(deltaSeconds: number) {
-        if (!this.fpsTexture || !this.fpsContext) {
+        if (!this.overlayTexture || !this.overlayContext) {
             return;
         }
 
@@ -194,114 +201,481 @@ export class DebugManager {
             return;
         }
 
-        const currentFps = this.fpsFrameCount / this.fpsElapsedTime;
-
+        this.displayedFps = this.fpsFrameCount / this.fpsElapsedTime;
         this.fpsFrameCount = 0;
         this.fpsElapsedTime = 0;
-        this.drawFpsCounter(currentFps);
+        this.drawOverlay();
     }
 
-    private drawFpsCounter(currentFps: number) {
-        if (!this.fpsContext || !this.fpsTexture) {
+    private drawOverlay() {
+        if (!this.overlayContext || !this.overlayTexture) {
             return;
         }
 
-        this.fpsContext.clearRect(0, 0, FPS_PANEL_WIDTH, FPS_PANEL_HEIGHT);
-        this.fpsContext.fillStyle = 'rgba(8, 8, 12, 0.82)';
-        this.fpsContext.fillRect(0, 0, FPS_PANEL_WIDTH, FPS_PANEL_HEIGHT);
-        this.fpsContext.strokeStyle = 'rgba(255, 255, 255, 0.18)';
-        this.fpsContext.lineWidth = 2;
-        this.fpsContext.strokeRect(1, 1, FPS_PANEL_WIDTH - 2, FPS_PANEL_HEIGHT - 2);
+        const panelWidth = this.getCurrentPanelWidth();
+        const panelHeight = this.getCurrentPanelHeight();
 
-        this.fpsContext.textAlign = 'right';
-        this.fpsContext.textBaseline = 'middle';
-        this.fpsContext.fillStyle = '#8ef5a4';
-        this.fpsContext.font = '700 26px monospace';
-        this.fpsContext.fillText(`FPS ${Math.round(currentFps)}`, FPS_PANEL_WIDTH - 18, 34);
+        this.syncCanvasSize();
+        this.overlayContext.clearRect(0, 0, panelWidth, panelHeight);
+        this.overlayContext.fillStyle = this.isWindowVisible
+            ? 'rgba(8, 8, 12, 0.88)'
+            : 'rgba(8, 8, 12, 0.76)';
+        this.overlayContext.fillRect(0, 0, panelWidth, panelHeight);
+        this.overlayContext.strokeStyle = 'rgba(255, 255, 255, 0.16)';
+        this.overlayContext.lineWidth = 2;
+        this.overlayContext.strokeRect(1, 1, panelWidth - 2, panelHeight - 2);
 
-        this.fpsContext.fillStyle = '#ffffff';
-        this.fpsContext.font = '16px monospace';
-        this.fpsContext.fillText(`Cap ${GameConfig.Fps}`, FPS_PANEL_WIDTH - 18, 68);
+        if (!this.isWindowVisible) {
+            this.drawToggleButton();
+            this.overlayTexture.needsUpdate = true;
 
-        this.fpsTexture.needsUpdate = true;
-    }
-
-    private updateFpsCounterLayout() {
-        if (!this.fpsSprite) {
             return;
         }
 
-        const halfFovRadians = THREE.MathUtils.degToRad(this.camera.fov * 0.5);
-        const halfHeight = Math.tan(halfFovRadians) * FPS_PANEL_DISTANCE;
-        const halfWidth = halfHeight * this.camera.aspect;
-        const panelAspect = FPS_PANEL_WIDTH / FPS_PANEL_HEIGHT;
-        const panelHeight = FPS_PANEL_WORLD_HEIGHT;
-        const panelWidth = panelHeight * panelAspect;
+        this.overlayContext.textBaseline = 'middle';
+        this.overlayContext.textAlign = 'left';
+        this.overlayContext.fillStyle = '#8ef5a4';
+        this.overlayContext.font = '700 28px monospace';
+        this.overlayContext.fillText(`FPS ${Math.round(this.displayedFps)}`, 20, 28);
 
-        this.fpsSprite.scale.set(panelWidth, panelHeight, 1);
-        this.fpsSprite.position.set(
-            halfWidth - panelWidth * 0.5 - FPS_PANEL_MARGIN,
-            halfHeight - panelHeight * 0.5 - FPS_PANEL_MARGIN,
-            -FPS_PANEL_DISTANCE,
+        this.overlayContext.textAlign = 'right';
+        this.overlayContext.fillStyle = '#ffffff';
+        this.overlayContext.font = '16px monospace';
+        this.overlayContext.fillText(`Cap ${GameConfig.Fps}`, panelWidth - 18, 30);
+
+        this.overlayContext.textAlign = 'left';
+        this.overlayContext.fillStyle = '#c8d0ff';
+        this.overlayContext.font = '15px monospace';
+        this.overlayContext.fillText('Debug Controls', 20, 64);
+        this.overlayContext.fillStyle = 'rgba(255, 255, 255, 0.5)';
+        this.overlayContext.fillText('Post FX and lighting controls', 20, 84);
+
+        this.drawToggleButton();
+
+        this.drawSectionTitle(
+            'Post Processing',
+            this.getPostControlsStartY() - SECTION_TITLE_HEIGHT + SECTION_TITLE_BASELINE_OFFSET,
         );
+
+        for (let index = 0; index < POST_PROCESSING_CONTROLS.length; index += 1) {
+            this.drawPostSlider(index);
+        }
+
+        this.drawSectionTitle(
+            'Lighting',
+            this.getLightSectionStartY() - SECTION_TITLE_HEIGHT + SECTION_TITLE_BASELINE_OFFSET,
+        );
+
+        for (let index = 0; index < LIGHT_CONTROLS.length; index += 1) {
+            this.drawLightSlider(index);
+        }
+
+        this.overlayTexture.needsUpdate = true;
     }
 
-    private logCameraPosition() {
-        const { x, y, z } = this.camera.position;
+    private drawSectionTitle(label: string, baselineY: number) {
+        if (!this.overlayContext) {
+            return;
+        }
 
-        console.log(
-            `Debug camera position: x=${x.toFixed(3)}, y=${y.toFixed(3)}, z=${z.toFixed(3)}`,
+        this.overlayContext.textAlign = 'left';
+        this.overlayContext.fillStyle = '#c8d0ff';
+        this.overlayContext.font = '15px monospace';
+        this.overlayContext.fillText(label, 20, baselineY);
+    }
+
+    private drawPostSlider(index: number) {
+        const control = POST_PROCESSING_CONTROLS[index];
+        const controlValue = this.postProcessingManager.getValue(control.key);
+        const rowTop = this.getPostControlsStartY() + index * SLIDER_ROW_HEIGHT;
+
+        this.drawSliderRow(control, controlValue, rowTop);
+    }
+
+    private drawLightSlider(index: number) {
+        const control = LIGHT_CONTROLS[index];
+        const controlValue = this.lightingManager.getValue(control.key);
+        const rowTop = this.getLightSectionStartY() + index * SLIDER_ROW_HEIGHT;
+
+        this.drawSliderRow(control, controlValue, rowTop);
+    }
+
+    private drawSliderRow(
+        control: {
+            readonly label: string;
+            readonly min: number;
+            readonly max: number;
+            readonly precision: number;
+        },
+        controlValue: number,
+        rowTop: number,
+    ) {
+        if (!this.overlayContext) {
+            return;
+        }
+
+        const sliderProgress =
+            (controlValue - control.min) / Math.max(control.max - control.min, Number.EPSILON);
+        const trackTop = rowTop + 18;
+        const knobCenterX = SLIDER_TRACK_X + SLIDER_TRACK_WIDTH * sliderProgress;
+        const knobCenterY = trackTop + SLIDER_TRACK_HEIGHT * 0.5;
+
+        this.overlayContext.textAlign = 'left';
+        this.overlayContext.fillStyle = '#ffffff';
+        this.overlayContext.font = '15px monospace';
+        this.overlayContext.fillText(control.label, SLIDER_TRACK_X, rowTop + SLIDER_LABEL_Y_OFFSET);
+
+        this.overlayContext.textAlign = 'right';
+        this.overlayContext.fillStyle = '#c8d0ff';
+        this.overlayContext.fillText(
+            controlValue.toFixed(control.precision),
+            PANEL_WIDTH - 18,
+            rowTop + SLIDER_LABEL_Y_OFFSET,
+        );
+
+        this.overlayContext.fillStyle = 'rgba(255, 255, 255, 0.12)';
+        this.overlayContext.fillRect(
+            SLIDER_TRACK_X,
+            trackTop,
+            SLIDER_TRACK_WIDTH,
+            SLIDER_TRACK_HEIGHT,
+        );
+
+        this.overlayContext.fillStyle = '#8ef5a4';
+        this.overlayContext.fillRect(
+            SLIDER_TRACK_X,
+            trackTop,
+            SLIDER_TRACK_WIDTH * sliderProgress,
+            SLIDER_TRACK_HEIGHT,
+        );
+
+        this.overlayContext.fillStyle = '#ffffff';
+        this.overlayContext.beginPath();
+        this.overlayContext.arc(knobCenterX, knobCenterY, 7, 0, Math.PI * 2);
+        this.overlayContext.fill();
+    }
+
+    private drawToggleButton() {
+        if (!this.overlayContext) {
+            return;
+        }
+
+        const toggleButtonRect = this.getLocalToggleButtonRect();
+
+        if (!toggleButtonRect) {
+            return;
+        }
+
+        this.overlayContext.fillStyle = 'rgba(255, 255, 255, 0.08)';
+        this.overlayContext.fillRect(
+            toggleButtonRect.left,
+            toggleButtonRect.top,
+            toggleButtonRect.width,
+            toggleButtonRect.height,
+        );
+        this.overlayContext.strokeStyle = 'rgba(255, 255, 255, 0.18)';
+        this.overlayContext.lineWidth = 1;
+        this.overlayContext.strokeRect(
+            toggleButtonRect.left,
+            toggleButtonRect.top,
+            toggleButtonRect.width,
+            toggleButtonRect.height,
+        );
+
+        this.overlayContext.textAlign = 'center';
+        this.overlayContext.fillStyle = '#ffffff';
+        this.overlayContext.font = '14px monospace';
+        this.overlayContext.fillText(
+            this.isWindowVisible ? 'Close Debug' : 'Open Debug',
+            toggleButtonRect.left + toggleButtonRect.width * 0.5,
+            toggleButtonRect.top + toggleButtonRect.height * 0.5,
         );
     }
 
     private readonly handlePointerDown = (event: PointerEvent) => {
-        if (event.button !== 2) {
+        if (event.button !== 0) {
             return;
         }
 
-        event.preventDefault();
-        this.isRotating = true;
-        this.pointerPosition.set(event.clientX, event.clientY);
+        if (this.tryToggleOverlay(event)) {
+            return;
+        }
+
+        if (!this.isWindowVisible) {
+            return;
+        }
+
+        if (this.tryStartSliderDrag(event)) {
+            return;
+        }
     };
 
     private readonly handlePointerMove = (event: PointerEvent) => {
-        if (!this.isRotating) {
-            return;
+        if (this.activeSlider) {
+            this.updateActiveSlider(event.clientX);
         }
-
-        const deltaX = event.clientX - this.pointerPosition.x;
-        const deltaY = event.clientY - this.pointerPosition.y;
-
-        this.pointerPosition.set(event.clientX, event.clientY);
-        this.yaw -= deltaX * LOOK_SENSITIVITY;
-        this.pitch -= deltaY * LOOK_SENSITIVITY;
-        this.pitch = THREE.MathUtils.clamp(this.pitch, -MAX_PITCH, MAX_PITCH);
-
-        this.applyCameraRotation();
     };
 
     private readonly handlePointerUp = (event: PointerEvent) => {
-        if (event.button !== 2) {
-            return;
+        if (event.button === 0) {
+            this.activeSlider = null;
         }
-
-        this.isRotating = false;
-    };
-
-    private readonly handleContextMenu = (event: MouseEvent) => {
-        event.preventDefault();
-    };
-
-    private readonly handleKeyDown = (event: KeyboardEvent) => {
-        this.keyStates.set(event.code, true);
-    };
-
-    private readonly handleKeyUp = (event: KeyboardEvent) => {
-        this.keyStates.set(event.code, false);
     };
 
     private readonly handleWindowBlur = () => {
-        this.keyStates.clear();
-        this.isRotating = false;
+        this.activeSlider = null;
     };
+
+    private tryStartSliderDrag(event: PointerEvent) {
+        if (!this.isEnabled) {
+            return false;
+        }
+
+        for (let index = 0; index < POST_PROCESSING_CONTROLS.length; index += 1) {
+            const sliderRect = this.getPostSliderScreenRect(index);
+
+            if (!sliderRect) {
+                continue;
+            }
+
+            const isInsideSlider =
+                event.clientX >= sliderRect.left &&
+                event.clientX <= sliderRect.left + sliderRect.width &&
+                event.clientY >= sliderRect.top &&
+                event.clientY <= sliderRect.top + sliderRect.height;
+
+            if (!isInsideSlider) {
+                continue;
+            }
+
+            event.preventDefault();
+            this.activeSlider = {
+                domain: 'post',
+                key: POST_PROCESSING_CONTROLS[index].key,
+            };
+            this.updateActiveSlider(event.clientX);
+
+            return true;
+        }
+
+        for (let index = 0; index < LIGHT_CONTROLS.length; index += 1) {
+            const sliderRect = this.getLightSliderScreenRect(index);
+
+            if (!sliderRect) {
+                continue;
+            }
+
+            const isInsideSlider =
+                event.clientX >= sliderRect.left &&
+                event.clientX <= sliderRect.left + sliderRect.width &&
+                event.clientY >= sliderRect.top &&
+                event.clientY <= sliderRect.top + sliderRect.height;
+
+            if (!isInsideSlider) {
+                continue;
+            }
+
+            event.preventDefault();
+            this.activeSlider = {
+                domain: 'light',
+                key: LIGHT_CONTROLS[index].key,
+            };
+            this.updateActiveSlider(event.clientX);
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private tryToggleOverlay(event: PointerEvent) {
+        const toggleButtonRect = this.getToggleButtonScreenRect();
+
+        if (!toggleButtonRect) {
+            return false;
+        }
+
+        const isInsideButton =
+            event.clientX >= toggleButtonRect.left &&
+            event.clientX <= toggleButtonRect.left + toggleButtonRect.width &&
+            event.clientY >= toggleButtonRect.top &&
+            event.clientY <= toggleButtonRect.top + toggleButtonRect.height;
+
+        if (!isInsideButton) {
+            return false;
+        }
+
+        event.preventDefault();
+        this.activeSlider = null;
+        this.isWindowVisible = !this.isWindowVisible;
+        this.updateViewport(
+            this.inputElement.clientWidth || window.innerWidth,
+            this.inputElement.clientHeight || window.innerHeight,
+        );
+        this.drawOverlay();
+
+        return true;
+    }
+
+    private updateActiveSlider(pointerX: number) {
+        if (!this.activeSlider) {
+            return;
+        }
+
+        const controlDefinition =
+            this.activeSlider.domain === 'post'
+                ? this.postProcessingManager.getControlDefinition(this.activeSlider.key)
+                : this.lightingManager.getControlDefinition(this.activeSlider.key);
+
+        if (!controlDefinition) {
+            return;
+        }
+
+        const controlIndex =
+            this.activeSlider.domain === 'post'
+                ? POST_PROCESSING_CONTROLS.findIndex(
+                      (control) => control.key === this.activeSlider?.key,
+                  )
+                : LIGHT_CONTROLS.findIndex((control) => control.key === this.activeSlider?.key);
+        const sliderRect =
+            this.activeSlider.domain === 'post'
+                ? this.getPostSliderScreenRect(controlIndex)
+                : this.getLightSliderScreenRect(controlIndex);
+
+        if (!sliderRect) {
+            return;
+        }
+
+        const normalizedValue = THREE.MathUtils.clamp(
+            (pointerX - sliderRect.left) / sliderRect.width,
+            0,
+            1,
+        );
+        const sliderValue = THREE.MathUtils.lerp(
+            controlDefinition.min,
+            controlDefinition.max,
+            normalizedValue,
+        );
+
+        if (this.activeSlider.domain === 'post') {
+            this.postProcessingManager.setValue(this.activeSlider.key, sliderValue);
+        } else {
+            this.lightingManager.setValue(this.activeSlider.key, sliderValue);
+        }
+
+        this.drawOverlay();
+    }
+
+    private getPostSliderScreenRect(index: number) {
+        return this.getSliderScreenRect(index, this.getPostControlsStartY());
+    }
+
+    private getLightSliderScreenRect(index: number) {
+        return this.getSliderScreenRect(index, this.getLightSectionStartY());
+    }
+
+    private getSliderScreenRect(index: number, sectionStartY: number) {
+        if (index < 0 || this.panelScreenWidth <= 0 || this.panelScreenHeight <= 0) {
+            return null;
+        }
+
+        const scaleX = this.panelScreenWidth / PANEL_WIDTH;
+        const scaleY = this.panelScreenHeight / this.getCurrentPanelHeight();
+        const rowTop = sectionStartY + index * SLIDER_ROW_HEIGHT;
+        const trackTop = rowTop + 18;
+
+        return {
+            left: this.panelScreenX + SLIDER_TRACK_X * scaleX,
+            top:
+                this.panelScreenY +
+                (trackTop - (SLIDER_INTERACTION_HEIGHT - SLIDER_TRACK_HEIGHT) * 0.5) * scaleY,
+            width: SLIDER_TRACK_WIDTH * scaleX,
+            height: SLIDER_INTERACTION_HEIGHT * scaleY,
+        };
+    }
+
+    private getPostControlsStartY() {
+        return PANEL_HEADER_HEIGHT + SECTION_TITLE_HEIGHT;
+    }
+
+    private getLightSectionStartY() {
+        return (
+            PANEL_HEADER_HEIGHT +
+            SECTION_TITLE_HEIGHT +
+            POST_PROCESSING_CONTROLS.length * SLIDER_ROW_HEIGHT +
+            SECTION_GAP +
+            SECTION_TITLE_HEIGHT
+        );
+    }
+
+    private getExpandedPanelHeight() {
+        return (
+            this.getLightSectionStartY() +
+            LIGHT_CONTROLS.length * SLIDER_ROW_HEIGHT +
+            PANEL_FOOTER_PADDING
+        );
+    }
+
+    private getCurrentPanelHeight() {
+        return this.isWindowVisible ? this.getExpandedPanelHeight() : HIDDEN_PANEL_HEIGHT;
+    }
+
+    private getToggleButtonScreenRect() {
+        if (this.panelScreenWidth <= 0 || this.panelScreenHeight <= 0) {
+            return null;
+        }
+
+        const toggleButtonRect = this.getLocalToggleButtonRect();
+
+        if (!toggleButtonRect) {
+            return null;
+        }
+
+        const scaleX = this.panelScreenWidth / this.getCurrentPanelWidth();
+        const scaleY = this.panelScreenHeight / this.getCurrentPanelHeight();
+
+        return {
+            left: this.panelScreenX + toggleButtonRect.left * scaleX,
+            top: this.panelScreenY + toggleButtonRect.top * scaleY,
+            width: toggleButtonRect.width * scaleX,
+            height: toggleButtonRect.height * scaleY,
+        };
+    }
+
+    private syncCanvasSize() {
+        const currentPanelWidth = this.getCurrentPanelWidth();
+        const currentPanelHeight = this.getCurrentPanelHeight();
+
+        if (
+            this.overlayCanvas.width === currentPanelWidth &&
+            this.overlayCanvas.height === currentPanelHeight
+        ) {
+            return;
+        }
+
+        this.overlayCanvas.width = currentPanelWidth;
+        this.overlayCanvas.height = currentPanelHeight;
+    }
+
+    private getCurrentPanelWidth() {
+        return this.isWindowVisible ? PANEL_WIDTH : HIDDEN_PANEL_WIDTH;
+    }
+
+    private getLocalToggleButtonRect() {
+        if (this.isWindowVisible) {
+            return {
+                left: PANEL_WIDTH - TOGGLE_BUTTON_MARGIN_RIGHT - TOGGLE_BUTTON_WIDTH,
+                top: TOGGLE_BUTTON_TOP,
+                width: TOGGLE_BUTTON_WIDTH,
+                height: TOGGLE_BUTTON_HEIGHT,
+            };
+        }
+
+        return {
+            left: HIDDEN_BUTTON_PADDING,
+            top: HIDDEN_BUTTON_PADDING,
+            width: HIDDEN_PANEL_WIDTH - HIDDEN_BUTTON_PADDING * 2,
+            height: HIDDEN_PANEL_HEIGHT - HIDDEN_BUTTON_PADDING * 2,
+        };
+    }
 }

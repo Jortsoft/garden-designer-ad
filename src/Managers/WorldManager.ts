@@ -1,56 +1,71 @@
 import * as THREE from 'three';
 import { Ground } from '../Entities/Ground';
 import { DebugManager } from './DebugManager';
+import { LightingManager } from './LightingManager';
+import { PostProcessingManager } from './PostProcessingManager';
+import { CameraController } from '../Systems/CameraController';
 
 export class WorldManager {
-  private readonly root = new THREE.Group();
-  private readonly ground = new Ground();
-  private readonly scene: THREE.Scene;
-  private readonly debugManager: DebugManager;
-  readonly camera: THREE.PerspectiveCamera;
+    private readonly root = new THREE.Group();
+    private readonly ground = new Ground();
+    private readonly scene: THREE.Scene;
+    private readonly lightingManager: LightingManager;
+    private readonly postProcessingManager: PostProcessingManager;
+    private readonly cameraController: CameraController;
+    private readonly debugManager: DebugManager;
+    readonly camera: THREE.PerspectiveCamera;
 
-    constructor(scene: THREE.Scene, inputElement: HTMLElement) {
+    constructor(
+        scene: THREE.Scene,
+        inputElement: HTMLElement,
+        renderer: THREE.WebGLRenderer,
+    ) {
         this.scene = scene;
         this.camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
-        this.debugManager = new DebugManager(this.camera, inputElement);
+        this.lightingManager = new LightingManager(this.scene);
+        this.postProcessingManager = new PostProcessingManager(
+            renderer,
+            this.scene,
+            this.camera,
+        );
+        this.cameraController = new CameraController(this.camera, inputElement);
+        this.debugManager = new DebugManager(
+            inputElement,
+            renderer,
+            this.lightingManager,
+            this.postProcessingManager,
+        );
         this.root.add(this.ground);
         this.scene.add(this.camera);
         this.scene.add(this.root);
     }
 
-  initialize() {
-    this.configureCamera();
-    this.configureLighting();
-    this.debugManager.initialize();
-    this.ground.load();
-  }
-
-  update(deltaSeconds: number) {
-    this.debugManager.update(deltaSeconds);
-  }
-
-    updateViewport(aspect: number) {
-        this.camera.aspect = aspect;
-        this.camera.updateProjectionMatrix();
-        this.debugManager.updateViewport();
+    initialize() {
+        this.lightingManager.initialize();
+        this.cameraController.initialize();
+        this.debugManager.initialize();
+        this.ground.load();
     }
 
-  dispose() {
-    this.debugManager.dispose();
-  }
+    update(deltaSeconds: number) {
+        this.cameraController.update(deltaSeconds);
+        this.debugManager.update(deltaSeconds);
+    }
 
-  private configureCamera() {
-    this.camera.position.set(0, 3.5, 7);
-    this.camera.lookAt(0, 0.75, 0);
-  }
+    render() {
+        this.postProcessingManager.render();
+        this.debugManager.render();
+    }
 
-  private configureLighting() {
-    const ambientLight = new THREE.AmbientLight('#ffffff', 0.7);
-    this.scene.add(ambientLight);
+    updateViewport(width: number, height: number) {
+        this.camera.aspect = width / height;
+        this.camera.updateProjectionMatrix();
+        this.postProcessingManager.setSize(width, height);
+        this.debugManager.updateViewport(width, height);
+    }
 
-    const directionalLight = new THREE.DirectionalLight('#ffffff', 1.6);
-    directionalLight.position.set(4, 6, 5);
-    directionalLight.castShadow = true;
-    this.scene.add(directionalLight);
-  }
+    dispose() {
+        this.cameraController.dispose();
+        this.debugManager.dispose();
+    }
 }

@@ -13,16 +13,24 @@ export class GamePlayScene {
 
   constructor(container: HTMLElement) {
     this.container = container;
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer = new THREE.WebGLRenderer({
+      antialias: window.devicePixelRatio <= 1.5,
+      powerPreference: 'high-performance',
+    });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.shadowMap.enabled = true;
+    this.renderer.domElement.style.touchAction = 'none';
     this.container.append(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
-    this.scene.background = new THREE.Color('#000000');
+    this.scene.background = new THREE.Color('#00b5f7');
 
-    this.worldManager = new WorldManager(this.scene, this.renderer.domElement);
+    this.worldManager = new WorldManager(
+      this.scene,
+      this.renderer.domElement,
+      this.renderer,
+    );
     this.worldManager.initialize();
 
     this.handleResize();
@@ -37,8 +45,8 @@ export class GamePlayScene {
     const width = window.innerWidth;
     const height = window.innerHeight;
 
-    this.renderer.setSize(width, height);
-    this.worldManager.updateViewport(width / height);
+    this.renderer.setSize(width, height, false);
+    this.worldManager.updateViewport(width, height);
   };
 
   private readonly renderFrame = () => {
@@ -50,7 +58,7 @@ export class GamePlayScene {
     }
 
     this.worldManager.update(deltaSeconds);
-    this.renderer.render(this.scene, this.worldManager.camera);
+    this.worldManager.render();
   };
 
   private getFrameDelta(rawDeltaSeconds: number) {
