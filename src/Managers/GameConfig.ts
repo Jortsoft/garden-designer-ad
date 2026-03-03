@@ -12,5 +12,8 @@ export const GameConfig: GameConfigModel = {
         dirX: 0.004,
         dirY: -0.703,
         dirZ: -0.711
+    },
+    postProcessingData: {
+        exposure: 1.88
     }
 };

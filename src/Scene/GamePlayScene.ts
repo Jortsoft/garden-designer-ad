@@ -9,17 +9,21 @@ export class GamePlayScene {
   private readonly worldManager: WorldManager;
   private readonly frameClock = new THREE.Clock();
   private readonly frameDuration = GameConfig.Fps > 0 ? 1 / GameConfig.Fps : 0;
+  private readonly isCoarsePointerDevice =
+    window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
   private accumulatedFrameTime = 0;
 
   constructor(container: HTMLElement) {
     this.container = container;
     this.renderer = new THREE.WebGLRenderer({
-      antialias: window.devicePixelRatio <= 1.5,
+      antialias: !this.isCoarsePointerDevice && window.devicePixelRatio <= 1.5,
       powerPreference: 'high-performance',
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    this.renderer.setPixelRatio(
+      Math.min(window.devicePixelRatio, this.isCoarsePointerDevice ? 1 : 1.5),
+    );
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.enabled = !this.isCoarsePointerDevice;
     this.renderer.domElement.style.touchAction = 'none';
     this.container.append(this.renderer.domElement);
 

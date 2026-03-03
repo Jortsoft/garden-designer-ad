@@ -28,12 +28,16 @@ export class WorldManager {
             this.scene,
             this.camera,
         );
-        this.cameraController = new CameraController(this.camera, inputElement);
         this.debugManager = new DebugManager(
             inputElement,
             renderer,
             this.lightingManager,
             this.postProcessingManager,
+        );
+        this.cameraController = new CameraController(
+            this.camera,
+            inputElement,
+            (screenX, screenY) => this.debugManager.isScreenPointBlocked(screenX, screenY),
         );
         this.root.add(this.ground);
         this.scene.add(this.camera);
@@ -42,8 +46,8 @@ export class WorldManager {
 
     initialize() {
         this.lightingManager.initialize();
-        this.cameraController.initialize();
         this.debugManager.initialize();
+        this.cameraController.initialize();
         this.ground.load();
     }
 

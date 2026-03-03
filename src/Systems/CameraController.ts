@@ -1,84 +1,86 @@
 import * as THREE from 'three';
 import { GameConfig } from '../Managers/GameConfig';
 
-const LOOK_SENSITIVITY = 0.005;
-const MOVE_SPEED = 2;
+const KEYBOARD_PAN_SPEED = 3.2;
+const DRAG_PAN_SPEED = 0.0032;
+const WHEEL_ZOOM_SPEED = 0.01;
+const PINCH_ZOOM_SPEED = 0.01;
+const MIN_CAMERA_HEIGHT = 0.8;
+const MAX_CAMERA_HEIGHT = 6.5;
+const MOUSE_PAN_BUTTON = 2;
 const MAX_PITCH = Math.PI / 2 - 0.05;
+
+type ScreenPointBlocker = (screenX: number, screenY: number) => boolean;
 
 export class CameraController {
     private readonly camera: THREE.PerspectiveCamera;
     private readonly inputElement: HTMLElement;
+    private readonly shouldBlockInput: ScreenPointBlocker;
     private readonly keyStates = new Map<string, boolean>();
     private readonly pointerPosition = new THREE.Vector2();
+    private readonly touchPointers = new Map<number, THREE.Vector2>();
     private readonly moveDirection = new THREE.Vector3();
-    private readonly forward = new THREE.Vector3();
-    private readonly right = new THREE.Vector3();
+    private readonly horizontalForward = new THREE.Vector3();
+    private readonly horizontalRight = new THREE.Vector3();
     private readonly lookDirection = new THREE.Vector3();
     private readonly upAxis = new THREE.Vector3(0, 1, 0);
     private readonly rotationEuler = new THREE.Euler(0, 0, 0, 'YXZ');
-    private readonly isEnabled = GameConfig.debugMode;
+    private readonly isDebugEnabled = GameConfig.debugMode;
 
-    private isRotating = false;
+    private isMousePanning = false;
+    private activeTouchPanId: number | null = null;
+    private lastPinchDistance = 0;
     private yaw = 0;
     private pitch = 0;
 
-    constructor(camera: THREE.PerspectiveCamera, inputElement: HTMLElement) {
+    constructor(
+        camera: THREE.PerspectiveCamera,
+        inputElement: HTMLElement,
+        shouldBlockInput: ScreenPointBlocker = () => false,
+    ) {
         this.camera = camera;
         this.inputElement = inputElement;
+        this.shouldBlockInput = shouldBlockInput;
     }
 
     initialize() {
         this.applyDefaultCameraPose();
         this.syncCameraAngles();
 
-        if (!this.isEnabled) {
-            return;
+        if (this.isDebugEnabled) {
+            this.logCameraPosition();
+            this.logCameraOrientation();
         }
-
-        this.logCameraPosition();
-        this.logCameraOrientation();
 
         this.inputElement.addEventListener('pointerdown', this.handlePointerDown);
         this.inputElement.addEventListener('contextmenu', this.handleContextMenu);
+        this.inputElement.addEventListener('wheel', this.handleWheel, { passive: false });
         window.addEventListener('pointermove', this.handlePointerMove);
         window.addEventListener('pointerup', this.handlePointerUp);
+        window.addEventListener('pointercancel', this.handlePointerUp);
         window.addEventListener('keydown', this.handleKeyDown);
         window.addEventListener('keyup', this.handleKeyUp);
         window.addEventListener('blur', this.handleWindowBlur);
     }
 
     update(deltaSeconds: number) {
-        if (!this.isEnabled) {
-            return;
-        }
-
         this.moveDirection.set(0, 0, 0);
+        this.updateHorizontalAxes();
 
-        this.forward.set(0, 0, -1).applyAxisAngle(this.upAxis, this.yaw);
-        this.right.set(1, 0, 0).applyAxisAngle(this.upAxis, this.yaw);
-
-        if (this.isKeyActive('KeyW')) {
-            this.moveDirection.add(this.forward);
+        if (this.isKeyActive('KeyW') || this.isKeyActive('ArrowUp')) {
+            this.moveDirection.add(this.horizontalForward);
         }
 
-        if (this.isKeyActive('KeyS')) {
-            this.moveDirection.sub(this.forward);
+        if (this.isKeyActive('KeyS') || this.isKeyActive('ArrowDown')) {
+            this.moveDirection.sub(this.horizontalForward);
         }
 
-        if (this.isKeyActive('KeyD')) {
-            this.moveDirection.add(this.right);
+        if (this.isKeyActive('KeyD') || this.isKeyActive('ArrowRight')) {
+            this.moveDirection.add(this.horizontalRight);
         }
 
-        if (this.isKeyActive('KeyA')) {
-            this.moveDirection.sub(this.right);
-        }
-
-        if (this.isKeyActive('KeyE')) {
-            this.moveDirection.add(this.upAxis);
-        }
-
-        if (this.isKeyActive('KeyQ')) {
-            this.moveDirection.sub(this.upAxis);
+        if (this.isKeyActive('KeyA') || this.isKeyActive('ArrowLeft')) {
+            this.moveDirection.sub(this.horizontalRight);
         }
 
         if (this.moveDirection.lengthSq() === 0) {
@@ -86,19 +88,17 @@ export class CameraController {
         }
 
         this.moveDirection.normalize();
-        this.camera.position.addScaledVector(this.moveDirection, MOVE_SPEED * deltaSeconds);
-        this.logCameraPosition();
+        this.camera.position.addScaledVector(this.moveDirection, KEYBOARD_PAN_SPEED * deltaSeconds);
+        this.logCameraPositionIfDebug();
     }
 
     dispose() {
-        if (!this.isEnabled) {
-            return;
-        }
-
         this.inputElement.removeEventListener('pointerdown', this.handlePointerDown);
         this.inputElement.removeEventListener('contextmenu', this.handleContextMenu);
+        this.inputElement.removeEventListener('wheel', this.handleWheel);
         window.removeEventListener('pointermove', this.handlePointerMove);
         window.removeEventListener('pointerup', this.handlePointerUp);
+        window.removeEventListener('pointercancel', this.handlePointerUp);
         window.removeEventListener('keydown', this.handleKeyDown);
         window.removeEventListener('keyup', this.handleKeyUp);
         window.removeEventListener('blur', this.handleWindowBlur);
@@ -128,8 +128,102 @@ export class CameraController {
         this.camera.quaternion.setFromEuler(this.rotationEuler);
     }
 
+    private updateHorizontalAxes() {
+        this.horizontalForward.set(0, 0, -1).applyAxisAngle(this.upAxis, this.yaw);
+        this.horizontalRight.set(1, 0, 0).applyAxisAngle(this.upAxis, this.yaw);
+    }
+
     private isKeyActive(code: string) {
         return this.keyStates.get(code) === true;
+    }
+
+    private applyPanFromScreenDelta(deltaX: number, deltaY: number) {
+        if (deltaX === 0 && deltaY === 0) {
+            return;
+        }
+
+        this.updateHorizontalAxes();
+
+        const panDistance = Math.max(this.camera.position.y, MIN_CAMERA_HEIGHT) * DRAG_PAN_SPEED;
+
+        this.camera.position.addScaledVector(this.horizontalRight, -deltaX * panDistance);
+        this.camera.position.addScaledVector(this.horizontalForward, deltaY * panDistance);
+        this.logCameraPositionIfDebug();
+    }
+
+    private applyZoomDelta(zoomDelta: number) {
+        if (zoomDelta === 0) {
+            return;
+        }
+
+        const lookDirection = this.camera.getWorldDirection(this.lookDirection);
+
+        if (Math.abs(lookDirection.y) < Number.EPSILON) {
+            return;
+        }
+
+        const currentHeight = this.camera.position.y;
+        const unclampedHeight = currentHeight + lookDirection.y * zoomDelta;
+        const targetHeight = THREE.MathUtils.clamp(
+            unclampedHeight,
+            MIN_CAMERA_HEIGHT,
+            MAX_CAMERA_HEIGHT,
+        );
+
+        if (targetHeight === currentHeight) {
+            return;
+        }
+
+        const clampedZoomDelta = (targetHeight - currentHeight) / lookDirection.y;
+
+        this.camera.position.addScaledVector(lookDirection, clampedZoomDelta);
+        this.logCameraPositionIfDebug();
+    }
+
+    private getTouchDistance() {
+        const touchPoints = Array.from(this.touchPointers.values());
+
+        if (touchPoints.length < 2) {
+            return 0;
+        }
+
+        return touchPoints[0].distanceTo(touchPoints[1]);
+    }
+
+    private tryCapturePointer(pointerId: number) {
+        if (this.inputElement.hasPointerCapture?.(pointerId)) {
+            return;
+        }
+
+        try {
+            this.inputElement.setPointerCapture(pointerId);
+        } catch {
+            return;
+        }
+    }
+
+    private tryReleasePointer(pointerId: number) {
+        if (!this.inputElement.hasPointerCapture?.(pointerId)) {
+            return;
+        }
+
+        try {
+            this.inputElement.releasePointerCapture(pointerId);
+        } catch {
+            return;
+        }
+    }
+
+    private isInputBlocked(screenX: number, screenY: number) {
+        return this.shouldBlockInput(screenX, screenY);
+    }
+
+    private logCameraPositionIfDebug() {
+        if (!this.isDebugEnabled) {
+            return;
+        }
+
+        this.logCameraPosition();
     }
 
     private logCameraPosition() {
@@ -151,43 +245,138 @@ export class CameraController {
     }
 
     private readonly handlePointerDown = (event: PointerEvent) => {
-        if (event.button !== 2) {
+        if (this.isInputBlocked(event.clientX, event.clientY)) {
+            return;
+        }
+
+        if (event.pointerType === 'mouse') {
+            if (event.button !== MOUSE_PAN_BUTTON) {
+                return;
+            }
+
+            event.preventDefault();
+            this.isMousePanning = true;
+            this.pointerPosition.set(event.clientX, event.clientY);
+            this.tryCapturePointer(event.pointerId);
+
+            return;
+        }
+
+        if (event.pointerType !== 'touch') {
             return;
         }
 
         event.preventDefault();
-        this.isRotating = true;
-        this.pointerPosition.set(event.clientX, event.clientY);
+        this.touchPointers.set(event.pointerId, new THREE.Vector2(event.clientX, event.clientY));
+        this.tryCapturePointer(event.pointerId);
+
+        if (this.touchPointers.size === 1) {
+            this.activeTouchPanId = event.pointerId;
+            this.pointerPosition.set(event.clientX, event.clientY);
+            this.lastPinchDistance = 0;
+
+            return;
+        }
+
+        this.activeTouchPanId = null;
+        this.lastPinchDistance = this.getTouchDistance();
     };
 
     private readonly handlePointerMove = (event: PointerEvent) => {
-        if (!this.isRotating) {
+        if (event.pointerType === 'mouse') {
+            if (!this.isMousePanning) {
+                return;
+            }
+
+            event.preventDefault();
+
+            const deltaX = event.clientX - this.pointerPosition.x;
+            const deltaY = event.clientY - this.pointerPosition.y;
+
+            this.pointerPosition.set(event.clientX, event.clientY);
+            this.applyPanFromScreenDelta(deltaX, deltaY);
+
             return;
         }
 
-        const deltaX = event.clientX - this.pointerPosition.x;
-        const deltaY = event.clientY - this.pointerPosition.y;
-
-        this.pointerPosition.set(event.clientX, event.clientY);
-
-        if (deltaX === 0 && deltaY === 0) {
+        if (event.pointerType !== 'touch') {
             return;
         }
 
-        this.yaw -= deltaX * LOOK_SENSITIVITY;
-        this.pitch -= deltaY * LOOK_SENSITIVITY;
-        this.pitch = THREE.MathUtils.clamp(this.pitch, -MAX_PITCH, MAX_PITCH);
+        const touchPoint = this.touchPointers.get(event.pointerId);
 
-        this.applyCameraRotation();
-        this.logCameraOrientation();
+        if (!touchPoint) {
+            return;
+        }
+
+        event.preventDefault();
+
+        const deltaX = event.clientX - touchPoint.x;
+        const deltaY = event.clientY - touchPoint.y;
+
+        touchPoint.set(event.clientX, event.clientY);
+
+        if (this.touchPointers.size >= 2) {
+            const pinchDistance = this.getTouchDistance();
+
+            if (this.lastPinchDistance > 0) {
+                this.applyZoomDelta((pinchDistance - this.lastPinchDistance) * PINCH_ZOOM_SPEED);
+            }
+
+            this.lastPinchDistance = pinchDistance;
+
+            return;
+        }
+
+        if (this.activeTouchPanId === event.pointerId) {
+            this.applyPanFromScreenDelta(deltaX, deltaY);
+        }
     };
 
     private readonly handlePointerUp = (event: PointerEvent) => {
-        if (event.button !== 2) {
+        if (event.pointerType === 'mouse') {
+            if (event.button === MOUSE_PAN_BUTTON) {
+                this.isMousePanning = false;
+                this.tryReleasePointer(event.pointerId);
+            }
+
             return;
         }
 
-        this.isRotating = false;
+        if (event.pointerType !== 'touch') {
+            return;
+        }
+
+        this.touchPointers.delete(event.pointerId);
+        this.tryReleasePointer(event.pointerId);
+
+        if (this.touchPointers.size >= 2) {
+            this.lastPinchDistance = this.getTouchDistance();
+
+            return;
+        }
+
+        this.lastPinchDistance = 0;
+
+        if (this.touchPointers.size === 1) {
+            const [pointerId, pointerPosition] = Array.from(this.touchPointers.entries())[0];
+
+            this.activeTouchPanId = pointerId;
+            this.pointerPosition.copy(pointerPosition);
+
+            return;
+        }
+
+        this.activeTouchPanId = null;
+    };
+
+    private readonly handleWheel = (event: WheelEvent) => {
+        if (this.isInputBlocked(event.clientX, event.clientY)) {
+            return;
+        }
+
+        event.preventDefault();
+        this.applyZoomDelta(-event.deltaY * WHEEL_ZOOM_SPEED);
     };
 
     private readonly handleContextMenu = (event: MouseEvent) => {
@@ -204,6 +393,9 @@ export class CameraController {
 
     private readonly handleWindowBlur = () => {
         this.keyStates.clear();
-        this.isRotating = false;
+        this.isMousePanning = false;
+        this.activeTouchPanId = null;
+        this.lastPinchDistance = 0;
+        this.touchPointers.clear();
     };
 }

@@ -4,6 +4,7 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { GameConfig } from './GameConfig';
 
 export type PostProcessingSettingKey =
     | 'exposure'
@@ -55,7 +56,7 @@ export const POST_PROCESSING_CONTROLS: readonly PostProcessingControlDefinition[
 ] as const;
 
 const DEFAULT_SETTINGS: PostProcessingSettings = {
-    exposure: 1,
+    exposure: GameConfig.postProcessingData.exposure,
     brightness: 0,
     contrast: 1,
     saturation: 1,
@@ -130,7 +131,7 @@ const COLOR_GRADING_SHADER = {
 export class PostProcessingManager {
     private readonly renderer: THREE.WebGLRenderer;
     private readonly composer: EffectComposer;
-    private readonly bloomPass: UnrealBloomPass;
+    private readonly bloomPass: UnrealBloomPass | null;
     private readonly colorPass: ShaderPass;
     private readonly settings: PostProcessingSettings = { ...DEFAULT_SETTINGS };
 
@@ -141,18 +142,22 @@ export class PostProcessingManager {
     ) {
         this.renderer = renderer;
         this.renderer.toneMapping = THREE.NoToneMapping;
-        this.renderer.toneMappingExposure = 1;
+        this.renderer.toneMappingExposure = GameConfig.postProcessingData.exposure;
 
         this.composer = new EffectComposer(this.renderer);
         this.composer.addPass(new RenderPass(scene, camera));
 
-        this.bloomPass = new UnrealBloomPass(
-            new THREE.Vector2(window.innerWidth, window.innerHeight),
-            this.settings.bloomStrength,
-            this.settings.bloomRadius,
-            this.settings.bloomThreshold,
-        );
-        this.composer.addPass(this.bloomPass);
+        if (this.shouldUseBloomPass()) {
+            this.bloomPass = new UnrealBloomPass(
+                new THREE.Vector2(window.innerWidth, window.innerHeight),
+                this.settings.bloomStrength,
+                this.settings.bloomRadius,
+                this.settings.bloomThreshold,
+            );
+            this.composer.addPass(this.bloomPass);
+        } else {
+            this.bloomPass = null;
+        }
 
         this.colorPass = new ShaderPass(COLOR_GRADING_SHADER);
         this.composer.addPass(this.colorPass);
@@ -168,7 +173,7 @@ export class PostProcessingManager {
 
     setSize(width: number, height: number) {
         this.composer.setSize(width, height);
-        this.bloomPass.setSize(width, height);
+        this.bloomPass?.setSize(width, height);
     }
 
     getValue(key: PostProcessingSettingKey) {
@@ -217,14 +222,24 @@ export class PostProcessingManager {
                 this.colorPass.uniforms[key].value = value;
                 break;
             case 'bloomStrength':
-                this.bloomPass.strength = value;
+                if (this.bloomPass) {
+                    this.bloomPass.strength = value;
+                }
                 break;
             case 'bloomRadius':
-                this.bloomPass.radius = value;
+                if (this.bloomPass) {
+                    this.bloomPass.radius = value;
+                }
                 break;
             case 'bloomThreshold':
-                this.bloomPass.threshold = value;
+                if (this.bloomPass) {
+                    this.bloomPass.threshold = value;
+                }
                 break;
         }
+    }
+
+    private shouldUseBloomPass() {
+        return !(window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0);
     }
 }

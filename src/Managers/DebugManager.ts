@@ -189,6 +189,19 @@ export class DebugManager {
         );
     }
 
+    isScreenPointBlocked(screenX: number, screenY: number) {
+        if (!this.isEnabled || this.panelScreenWidth <= 0 || this.panelScreenHeight <= 0) {
+            return false;
+        }
+
+        return (
+            screenX >= this.panelScreenX &&
+            screenX <= this.panelScreenX + this.panelScreenWidth &&
+            screenY >= this.panelScreenY &&
+            screenY <= this.panelScreenY + this.panelScreenHeight
+        );
+    }
+
     private updateFpsCounter(deltaSeconds: number) {
         if (!this.overlayTexture || !this.overlayContext) {
             return;

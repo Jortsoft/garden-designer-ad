@@ -10,5 +10,8 @@ export interface GameConfigModel {
         dirX: number;
         dirY: number;
         dirZ: number;
+    },
+    postProcessingData: {
+        exposure: number;
     }
 }
