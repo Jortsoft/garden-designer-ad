@@ -1,0 +1,20 @@
+{
+  "name": "garden-designer-ad",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "build-offline": "tsc && vite build --config vite.offline.config.ts && node scripts/write-offline-html.mjs",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@types/three": "^0.183.1",
+    "typescript": "~5.9.3",
+    "vite": "^7.3.1"
+  },
+  "dependencies": {
+    "three": "^0.183.2"
+  }
+}
