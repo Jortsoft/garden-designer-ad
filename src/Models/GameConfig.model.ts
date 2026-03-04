@@ -21,5 +21,10 @@ export interface GameConfigModel {
     enableShadow: boolean;
     postProcessingData: {
         exposure: number;
+        vignette: number;
+        vignetteSoft: number;
+    },
+    lightData: {
+        sunIntensity: number;
     }
 }

@@ -1,9 +1,9 @@
 import * as THREE from 'three';
+import type { LightSettingKey } from '../Models/LightManager.model';
+import type { PostProcessingSettingKey } from '../Models/PostProcessing.model';
 import { GameConfig } from './GameConfig';
 import { LIGHT_CONTROLS, LightingManager } from './LightingManager';
-import type { LightSettingKey } from './LightingManager';
 import { POST_PROCESSING_CONTROLS, PostProcessingManager } from './PostProcessingManager';
-import type { PostProcessingSettingKey } from './PostProcessingManager';
 
 const FPS_SAMPLE_WINDOW = 0.25;
 const PANEL_WIDTH = 360;

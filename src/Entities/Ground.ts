@@ -8,6 +8,7 @@ const TARGET_GROUND_SIZE = 6;
 export class Ground extends THREE.Group {
   private readonly loader = new GLTFLoader();
   private readonly maxTextureAnisotropy: number;
+  private loadPromise: Promise<void> | null = null;
   private isLoaded = false;
   private isLoading = false;
 
@@ -19,27 +20,32 @@ export class Ground extends THREE.Group {
 
   load() {
     if (this.isLoaded || this.isLoading) {
-      return;
+      return this.loadPromise ?? Promise.resolve();
     }
 
     this.isLoading = true;
+    this.loadPromise = new Promise((resolve, reject) => {
+      this.loader.load(
+        GROUND_MODEL_PATH,
+        (gltf) => {
+          const groundModel = gltf.scene;
 
-    this.loader.load(
-      GROUND_MODEL_PATH,
-      (gltf) => {
-        const groundModel = gltf.scene;
+          this.prepareModel(groundModel);
+          this.add(groundModel);
+          this.isLoaded = true;
+          this.isLoading = false;
+          resolve();
+        },
+        undefined,
+        (error) => {
+          this.isLoading = false;
+          console.error(`Failed to load ground model: ${GROUND_MODEL_PATH}`, error);
+          reject(error);
+        },
+      );
+    });
 
-        this.prepareModel(groundModel);
-        this.add(groundModel);
-        this.isLoaded = true;
-        this.isLoading = false;
-      },
-      undefined,
-      (error) => {
-        this.isLoading = false;
-        console.error(`Failed to load ground model: ${GROUND_MODEL_PATH}`, error);
-      },
-    );
+    return this.loadPromise;
   }
 
   private prepareModel(model: THREE.Object3D) {

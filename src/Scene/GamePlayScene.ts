@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GameConfig } from '../Managers/GameConfig';
+import { LoaderOverlay } from '../Systems/LoaderOverlay';
 import { WorldManager } from '../Managers/WorldManager';
 
 export class GamePlayScene {
@@ -7,6 +8,7 @@ export class GamePlayScene {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene: THREE.Scene;
   private readonly worldManager: WorldManager;
+  private readonly loaderOverlay: LoaderOverlay;
   private readonly frameClock = new THREE.Clock();
   private readonly frameDuration = GameConfig.Fps > 0 ? 1 / GameConfig.Fps : 0;
   private readonly isCoarsePointerDevice =
@@ -37,7 +39,11 @@ export class GamePlayScene {
       this.renderer.domElement,
       this.renderer,
     );
-    this.worldManager.initialize();
+    this.loaderOverlay = new LoaderOverlay(this.renderer);
+
+    const worldReadyPromise = this.worldManager.initialize();
+
+    this.loaderOverlay.initialize(worldReadyPromise);
 
     this.handleResize();
     window.addEventListener('resize', this.handleResize);
@@ -53,6 +59,7 @@ export class GamePlayScene {
 
     this.renderer.setSize(width, height, false);
     this.worldManager.updateViewport(width, height);
+    this.loaderOverlay.updateViewport(width, height);
   };
 
   private readonly renderFrame = () => {
@@ -64,7 +71,9 @@ export class GamePlayScene {
     }
 
     this.worldManager.update(deltaSeconds);
+    this.loaderOverlay.update(deltaSeconds);
     this.worldManager.render();
+    this.loaderOverlay.render();
   };
 
   private getFrameDelta(rawDeltaSeconds: number) {

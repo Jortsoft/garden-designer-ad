@@ -4,42 +4,12 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { ShaderPass } from 'three/examples/jsm/postprocessing/ShaderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import type {
+    PostProcessingControlDefinition,
+    PostProcessingSettingKey,
+    PostProcessingSettings,
+} from '../Models/PostProcessing.model';
 import { GameConfig } from './GameConfig';
-
-export type PostProcessingSettingKey =
-    | 'exposure'
-    | 'brightness'
-    | 'contrast'
-    | 'saturation'
-    | 'temperature'
-    | 'tint'
-    | 'vignetteIntensity'
-    | 'vignetteSmoothness'
-    | 'bloomStrength'
-    | 'bloomRadius'
-    | 'bloomThreshold';
-
-export interface PostProcessingControlDefinition {
-    readonly key: PostProcessingSettingKey;
-    readonly label: string;
-    readonly min: number;
-    readonly max: number;
-    readonly precision: number;
-}
-
-export interface PostProcessingSettings {
-    exposure: number;
-    brightness: number;
-    contrast: number;
-    saturation: number;
-    temperature: number;
-    tint: number;
-    vignetteIntensity: number;
-    vignetteSmoothness: number;
-    bloomStrength: number;
-    bloomRadius: number;
-    bloomThreshold: number;
-}
 
 export const POST_PROCESSING_CONTROLS: readonly PostProcessingControlDefinition[] = [
     { key: 'exposure', label: 'Exposure', min: 0.6, max: 2.2, precision: 2 },
@@ -62,8 +32,8 @@ const DEFAULT_SETTINGS: PostProcessingSettings = {
     saturation: 1,
     temperature: 0,
     tint: 0,
-    vignetteIntensity: 0,
-    vignetteSmoothness: 0.55,
+    vignetteIntensity: GameConfig.postProcessingData.vignette,
+    vignetteSmoothness: GameConfig.postProcessingData.vignetteSoft,
     bloomStrength: 0,
     bloomRadius: 0,
     bloomThreshold: 1,

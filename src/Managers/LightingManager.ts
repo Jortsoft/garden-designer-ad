@@ -1,20 +1,9 @@
 import * as THREE from 'three';
+import type {
+    LightControlDefinition,
+    LightSettingKey,
+} from '../Models/LightManager.model';
 import { GameConfig } from './GameConfig';
-
-export type LightSettingKey =
-    | 'ambientIntensity'
-    | 'sunIntensity'
-    | 'sunX'
-    | 'sunY'
-    | 'sunZ';
-
-export interface LightControlDefinition {
-    readonly key: LightSettingKey;
-    readonly label: string;
-    readonly min: number;
-    readonly max: number;
-    readonly precision: number;
-}
 
 export const LIGHT_CONTROLS: readonly LightControlDefinition[] = [
     { key: 'ambientIntensity', label: 'Ambient', min: 0, max: 3, precision: 2 },
@@ -26,7 +15,7 @@ export const LIGHT_CONTROLS: readonly LightControlDefinition[] = [
 
 const DEFAULT_LIGHT_VALUES = {
     ambientIntensity: 0.7,
-    sunIntensity: 1.6,
+    sunIntensity: GameConfig.lightData.sunIntensity,
     sunX: 4,
     sunY: 6,
     sunZ: 5,

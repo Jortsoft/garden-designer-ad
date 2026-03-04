@@ -49,7 +49,7 @@ export class WorldManager {
         this.lightingManager.initialize();
         this.debugManager.initialize();
         this.cameraController.initialize();
-        this.ground.load();
+        return this.ground.load();
     }
 
     update(deltaSeconds: number) {

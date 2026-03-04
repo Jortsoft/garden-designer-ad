@@ -22,6 +22,11 @@ export const GameConfig: GameConfigModel = {
     MaxDownMove: 3.119,
     enableShadow: true,
     postProcessingData: {
-        exposure: 1.88
+        exposure: 1.88,
+        vignette: 0.62,
+        vignetteSoft: 0.40
+    },
+    lightData: {
+        sunIntensity: 2.96
     }
 };
