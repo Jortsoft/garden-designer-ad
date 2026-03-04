@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { GameConfig } from '../Managers/GameConfig';
 import { LoaderOverlay } from '../Systems/LoaderOverlay';
 import { WorldManager } from '../Managers/WorldManager';
-import { hasCoarsePointerDevice } from '../Utils/hasCoarsePointerDevice';
+import { hasCoarsePointerDevice } from '../Utils/HasCoarsePointerDevice';
 
 export class GamePlayScene {
   private readonly container: HTMLElement;

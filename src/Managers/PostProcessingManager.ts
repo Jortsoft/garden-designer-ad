@@ -11,7 +11,7 @@ import type {
 } from '../Models/PostProcessing.model';
 import { GameConfig } from './GameConfig';
 import { POST_PROCESSING_SHADER } from '../Shaders/PostProcessing.shader';
-import { hasCoarsePointerDevice } from '../Utils/hasCoarsePointerDevice';
+import { hasCoarsePointerDevice } from '../Utils/HasCoarsePointerDevice';
 
 export const POST_PROCESSING_CONTROLS: readonly PostProcessingControlDefinition[] = [
     { key: 'exposure', label: 'Exposure', min: 0.6, max: 2.2, precision: 2 },
