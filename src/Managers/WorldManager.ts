@@ -4,10 +4,12 @@ import { DebugManager } from './DebugManager';
 import { LightingManager } from './LightingManager';
 import { PostProcessingManager } from './PostProcessingManager';
 import { CameraController } from '../Systems/CameraController';
+import { WindWaveSystem } from '../Effects/WindWaveEffect';
 
 export class WorldManager {
     private readonly root = new THREE.Group();
     private readonly ground: Ground;
+    private readonly windWaveSystem: WindWaveSystem;
     private readonly scene: THREE.Scene;
     private readonly lightingManager: LightingManager;
     private readonly postProcessingManager: PostProcessingManager;
@@ -23,6 +25,7 @@ export class WorldManager {
         this.scene = scene;
         this.camera = new THREE.PerspectiveCamera(55, 1, 0.1, 100);
         this.ground = new Ground(renderer.capabilities.getMaxAnisotropy());
+        this.windWaveSystem = new WindWaveSystem();
         this.lightingManager = new LightingManager(this.scene);
         this.postProcessingManager = new PostProcessingManager(
             renderer,
@@ -41,6 +44,7 @@ export class WorldManager {
             (screenX, screenY) => this.debugManager.isScreenPointBlocked(screenX, screenY),
         );
         this.root.add(this.ground);
+        this.root.add(this.windWaveSystem);
         this.scene.add(this.camera);
         this.scene.add(this.root);
     }
@@ -49,11 +53,13 @@ export class WorldManager {
         this.lightingManager.initialize();
         this.debugManager.initialize();
         this.cameraController.initialize();
+        this.windWaveSystem.initialize();
         return this.ground.load();
     }
 
     update(deltaSeconds: number) {
         this.cameraController.update(deltaSeconds);
+        this.windWaveSystem.update(deltaSeconds);
         this.debugManager.update(deltaSeconds);
     }
 
@@ -72,5 +78,6 @@ export class WorldManager {
     dispose() {
         this.cameraController.dispose();
         this.debugManager.dispose();
+        this.windWaveSystem.dispose();
     }
 }
