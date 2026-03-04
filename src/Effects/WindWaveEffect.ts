@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import type { WindStreak } from '../Models/WindWave.model';
 import { WIND_STREAK_SHADER } from '../Shaders/WindStreak.shader';
 
-const STREAK_COUNT = 1300;
+const STREAK_COUNT = 100;
 const BASE_WIND_DIRECTION = new THREE.Vector2(0.95, 0.24).normalize();
 const TRAVEL_HALF_DISTANCE = 4.3;
 const LATERAL_SPAWN_SPREAD = 2.3;

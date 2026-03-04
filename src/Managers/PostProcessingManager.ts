@@ -10,6 +10,8 @@ import type {
     PostProcessingSettings,
 } from '../Models/PostProcessing.model';
 import { GameConfig } from './GameConfig';
+import { POST_PROCESSING_SHADER } from '../Shaders/PostProcessing.shader';
+import { hasCoarsePointerDevice } from '../Utils/hasCoarsePointerDevice';
 
 export const POST_PROCESSING_CONTROLS: readonly PostProcessingControlDefinition[] = [
     { key: 'exposure', label: 'Exposure', min: 0.6, max: 2.2, precision: 2 },
@@ -43,66 +45,12 @@ const CONTROL_LOOKUP = new Map(
     POST_PROCESSING_CONTROLS.map((control) => [control.key, control]),
 );
 
-const COLOR_GRADING_SHADER = {
-    uniforms: {
-        tDiffuse: { value: null },
-        exposure: { value: DEFAULT_SETTINGS.exposure },
-        brightness: { value: DEFAULT_SETTINGS.brightness },
-        contrast: { value: DEFAULT_SETTINGS.contrast },
-        saturation: { value: DEFAULT_SETTINGS.saturation },
-        temperature: { value: DEFAULT_SETTINGS.temperature },
-        tint: { value: DEFAULT_SETTINGS.tint },
-        vignetteIntensity: { value: DEFAULT_SETTINGS.vignetteIntensity },
-        vignetteSmoothness: { value: DEFAULT_SETTINGS.vignetteSmoothness },
-    },
-    vertexShader: `
-        varying vec2 vUv;
-
-        void main() {
-            vUv = uv;
-            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-        }
-    `,
-    fragmentShader: `
-        uniform sampler2D tDiffuse;
-        uniform float exposure;
-        uniform float brightness;
-        uniform float contrast;
-        uniform float saturation;
-        uniform float temperature;
-        uniform float tint;
-        uniform float vignetteIntensity;
-        uniform float vignetteSmoothness;
-
-        varying vec2 vUv;
-
-        void main() {
-            vec4 source = texture2D(tDiffuse, vUv);
-            vec3 color = source.rgb * exposure;
-
-            color += brightness;
-            color.r += temperature * 0.12;
-            color.b -= temperature * 0.12;
-            color.g += tint * 0.08;
-
-            float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
-            color = mix(vec3(luminance), color, saturation);
-            color = (color - 0.5) * contrast + 0.5;
-
-            float distanceToCenter = distance(vUv, vec2(0.5)) * 1.41421356;
-            float vignetteMask = smoothstep(1.0 - vignetteSmoothness, 1.0, distanceToCenter);
-            color *= 1.0 - vignetteMask * vignetteIntensity;
-
-            gl_FragColor = vec4(max(color, 0.0), source.a);
-        }
-    `,
-};
-
 export class PostProcessingManager {
     private readonly renderer: THREE.WebGLRenderer;
     private readonly composer: EffectComposer;
     private readonly bloomPass: UnrealBloomPass | null;
     private readonly colorPass: ShaderPass;
+    private readonly outputPass: OutputPass;
     private readonly settings: PostProcessingSettings = { ...DEFAULT_SETTINGS };
 
     constructor(
@@ -129,10 +77,11 @@ export class PostProcessingManager {
             this.bloomPass = null;
         }
 
-        this.colorPass = new ShaderPass(COLOR_GRADING_SHADER);
+        this.colorPass = new ShaderPass(POST_PROCESSING_SHADER);
         this.composer.addPass(this.colorPass);
 
-        this.composer.addPass(new OutputPass());
+        this.outputPass = new OutputPass();
+        this.composer.addPass(this.outputPass);
 
         this.applyAllSettings();
     }
@@ -144,6 +93,13 @@ export class PostProcessingManager {
     setSize(width: number, height: number) {
         this.composer.setSize(width, height);
         this.bloomPass?.setSize(width, height);
+    }
+
+    dispose() {
+        this.bloomPass?.dispose();
+        this.colorPass.dispose();
+        this.outputPass.dispose();
+        this.composer.dispose();
     }
 
     getValue(key: PostProcessingSettingKey) {
@@ -210,6 +166,6 @@ export class PostProcessingManager {
     }
 
     private shouldUseBloomPass() {
-        return !(window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0);
+        return !hasCoarsePointerDevice();
     }
 }

@@ -26,6 +26,7 @@ export class LoaderOverlay {
     private loadingElapsed = 0;
     private revealElapsed = 0;
     private state: LoaderOverlayState = 'loading';
+    private isDisposed = false;
 
     constructor(renderer: THREE.WebGLRenderer) {
         this.renderer = renderer;
@@ -55,6 +56,10 @@ export class LoaderOverlay {
             worldReadyPromise,
             this.loadCloudTextures(),
         ]).then(() => {
+            if (this.isDisposed) {
+                return;
+            }
+
             this.beginReveal();
         });
     }
@@ -108,6 +113,11 @@ export class LoaderOverlay {
     }
 
     dispose() {
+        if (this.isDisposed) {
+            return;
+        }
+
+        this.isDisposed = true;
         this.backdropMesh.geometry.dispose();
         this.backdropMaterial.dispose();
         this.overlayScene.remove(this.backdropMesh);
@@ -443,6 +453,12 @@ export class LoaderOverlay {
             this.textureLoader.loadAsync(CLOUD_COLOR_PATH),
             this.textureLoader.loadAsync(CLOUD_ALPHA_PATH),
         ]);
+
+        if (this.isDisposed) {
+            cloudTexture.dispose();
+            alphaTexture.dispose();
+            return;
+        }
 
         cloudTexture.colorSpace = THREE.SRGBColorSpace;
         cloudTexture.minFilter = THREE.LinearMipmapLinearFilter;

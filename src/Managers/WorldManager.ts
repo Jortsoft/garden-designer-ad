@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { Ground } from '../Entities/Ground';
 import { DebugManager } from './DebugManager';
+import { GroundPlacementDebugManager } from './GroundPlacementDebugManager';
 import { LightingManager } from './LightingManager';
 import { PostProcessingManager } from './PostProcessingManager';
 import { CameraController } from '../Systems/CameraController';
@@ -15,6 +16,7 @@ export class WorldManager {
     private readonly postProcessingManager: PostProcessingManager;
     private readonly cameraController: CameraController;
     private readonly debugManager: DebugManager;
+    private readonly groundPlacementDebugManager: GroundPlacementDebugManager;
     readonly camera: THREE.PerspectiveCamera;
 
     constructor(
@@ -43,6 +45,12 @@ export class WorldManager {
             inputElement,
             (screenX, screenY) => this.debugManager.isScreenPointBlocked(screenX, screenY),
         );
+        this.groundPlacementDebugManager = new GroundPlacementDebugManager(
+            this.camera,
+            this.ground,
+            inputElement,
+            (screenX, screenY) => this.debugManager.isScreenPointBlocked(screenX, screenY),
+        );
         this.root.add(this.ground);
         this.root.add(this.windWaveSystem);
         this.scene.add(this.camera);
@@ -53,6 +61,7 @@ export class WorldManager {
         this.lightingManager.initialize();
         this.debugManager.initialize();
         this.cameraController.initialize();
+        this.groundPlacementDebugManager.initialize(this.root);
         this.windWaveSystem.initialize();
         return this.ground.load();
     }
@@ -77,7 +86,13 @@ export class WorldManager {
 
     dispose() {
         this.cameraController.dispose();
+        this.groundPlacementDebugManager.dispose();
         this.debugManager.dispose();
+        this.postProcessingManager.dispose();
+        this.lightingManager.dispose();
         this.windWaveSystem.dispose();
+        this.root.clear();
+        this.scene.remove(this.root);
+        this.scene.remove(this.camera);
     }
 }

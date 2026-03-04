@@ -56,6 +56,11 @@ export class LightingManager {
         this.scene.add(this.directionalLight);
     }
 
+    dispose() {
+        this.scene.remove(this.ambientLight);
+        this.scene.remove(this.directionalLight);
+    }
+
     getValue(key: LightSettingKey) {
         switch (key) {
             case 'ambientIntensity':

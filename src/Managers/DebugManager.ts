@@ -7,7 +7,7 @@ import { POST_PROCESSING_CONTROLS, PostProcessingManager } from './PostProcessin
 
 const FPS_SAMPLE_WINDOW = 0.25;
 const PANEL_WIDTH = 360;
-const PANEL_HEADER_HEIGHT = 92;
+const PANEL_HEADER_HEIGHT = 204;
 const SECTION_TITLE_HEIGHT = 28;
 const SECTION_TITLE_BASELINE_OFFSET = 12;
 const SECTION_GAP = 8;
@@ -28,6 +28,12 @@ const TOGGLE_BUTTON_TOP = 16;
 const HIDDEN_PANEL_WIDTH = 132;
 const HIDDEN_PANEL_HEIGHT = 48;
 const HIDDEN_BUTTON_PADDING = 8;
+const STATS_SECTION_TOP = 96;
+const STATS_ROW_HEIGHT = 28;
+const STATS_COLUMN_COUNT = 3;
+const STATS_COLUMN_GAP = 12;
+const STATS_LABEL_Y_OFFSET = 4;
+const STATS_VALUE_Y_OFFSET = 19;
 
 export class DebugManager {
     private readonly inputElement: HTMLElement;
@@ -51,11 +57,22 @@ export class DebugManager {
     private fpsFrameCount = 0;
     private fpsElapsedTime = 0;
     private displayedFps = GameConfig.Fps;
+    private shouldRefreshPerformanceSummary = true;
     private isWindowVisible = true;
     private panelScreenX = 0;
     private panelScreenY = 0;
     private panelScreenWidth = 0;
     private panelScreenHeight = 0;
+    private readonly performanceStats = {
+        batches: 0,
+        geometries: 0,
+        lines: 0,
+        points: 0,
+        programs: 0,
+        textures: 0,
+        triangles: 0,
+        vertices: 0,
+    };
 
     constructor(
         inputElement: HTMLElement,
@@ -126,6 +143,12 @@ export class DebugManager {
     render() {
         if (!this.isEnabled || !this.overlayPanel) {
             return;
+        }
+
+        if (this.shouldRefreshPerformanceSummary) {
+            this.refreshPerformanceSummary();
+            this.drawOverlay();
+            this.shouldRefreshPerformanceSummary = false;
         }
 
         const previousAutoClear = this.renderer.autoClear;
@@ -217,7 +240,7 @@ export class DebugManager {
         this.displayedFps = this.fpsFrameCount / this.fpsElapsedTime;
         this.fpsFrameCount = 0;
         this.fpsElapsedTime = 0;
-        this.drawOverlay();
+        this.shouldRefreshPerformanceSummary = true;
     }
 
     private drawOverlay() {
@@ -264,6 +287,7 @@ export class DebugManager {
         this.overlayContext.fillText('Post FX and lighting controls', 20, 84);
 
         this.drawToggleButton();
+        this.drawPerformanceSummary();
 
         this.drawSectionTitle(
             'Post Processing',
@@ -286,6 +310,73 @@ export class DebugManager {
         this.overlayTexture.needsUpdate = true;
     }
 
+    private refreshPerformanceSummary() {
+        const renderInfo = this.renderer.info.render;
+        const memoryInfo = this.renderer.info.memory;
+
+        this.performanceStats.batches = renderInfo.calls;
+        this.performanceStats.geometries = memoryInfo.geometries;
+        this.performanceStats.lines = renderInfo.lines;
+        this.performanceStats.points = renderInfo.points;
+        this.performanceStats.programs = this.renderer.info.programs?.length ?? 0;
+        this.performanceStats.textures = memoryInfo.textures;
+        this.performanceStats.triangles = renderInfo.triangles;
+        this.performanceStats.vertices =
+            renderInfo.triangles * 3 +
+            renderInfo.lines * 2 +
+            renderInfo.points;
+    }
+
+    private drawPerformanceSummary() {
+        if (!this.overlayContext) {
+            return;
+        }
+
+        const metrics = [
+            { label: 'MS', value: this.formatFrameTime(this.getAverageFrameTimeMilliseconds()) },
+            { label: 'Batches', value: this.formatCompactNumber(this.performanceStats.batches) },
+            { label: 'Verts', value: this.formatCompactNumber(this.performanceStats.vertices) },
+            { label: 'Tris', value: this.formatCompactNumber(this.performanceStats.triangles) },
+            { label: 'Geom', value: this.formatCompactNumber(this.performanceStats.geometries) },
+            { label: 'Tex', value: this.formatCompactNumber(this.performanceStats.textures) },
+            { label: 'Lines', value: this.formatCompactNumber(this.performanceStats.lines) },
+            { label: 'Points', value: this.formatCompactNumber(this.performanceStats.points) },
+            { label: 'Prog', value: this.formatCompactNumber(this.performanceStats.programs) },
+        ] as const;
+        const contentWidth = PANEL_WIDTH - SLIDER_TRACK_X * 2;
+        const columnWidth =
+            (contentWidth - STATS_COLUMN_GAP * (STATS_COLUMN_COUNT - 1)) / STATS_COLUMN_COUNT;
+
+        this.drawSectionTitle(
+            'Renderer Stats',
+            STATS_SECTION_TOP + SECTION_TITLE_BASELINE_OFFSET,
+        );
+
+        for (let index = 0; index < metrics.length; index += 1) {
+            const columnIndex = index % STATS_COLUMN_COUNT;
+            const rowIndex = Math.floor(index / STATS_COLUMN_COUNT);
+            const cellLeft = SLIDER_TRACK_X + columnIndex * (columnWidth + STATS_COLUMN_GAP);
+            const cellTop = STATS_SECTION_TOP + SECTION_TITLE_HEIGHT + rowIndex * STATS_ROW_HEIGHT;
+
+            this.overlayContext.textAlign = 'left';
+            this.overlayContext.fillStyle = 'rgba(255, 255, 255, 0.52)';
+            this.overlayContext.font = '11px monospace';
+            this.overlayContext.fillText(
+                metrics[index].label,
+                cellLeft,
+                cellTop + STATS_LABEL_Y_OFFSET,
+            );
+
+            this.overlayContext.fillStyle = '#ffffff';
+            this.overlayContext.font = '15px monospace';
+            this.overlayContext.fillText(
+                metrics[index].value,
+                cellLeft,
+                cellTop + STATS_VALUE_Y_OFFSET,
+            );
+        }
+    }
+
     private drawSectionTitle(label: string, baselineY: number) {
         if (!this.overlayContext) {
             return;
@@ -295,6 +386,32 @@ export class DebugManager {
         this.overlayContext.fillStyle = '#c8d0ff';
         this.overlayContext.font = '15px monospace';
         this.overlayContext.fillText(label, 20, baselineY);
+    }
+
+    private getAverageFrameTimeMilliseconds() {
+        if (this.displayedFps <= Number.EPSILON) {
+            return 0;
+        }
+
+        return 1000 / this.displayedFps;
+    }
+
+    private formatFrameTime(value: number) {
+        return value >= 100 ? value.toFixed(0) : value.toFixed(1);
+    }
+
+    private formatCompactNumber(value: number) {
+        if (value >= 1_000_000) {
+            const scaledValue = value / 1_000_000;
+            return `${scaledValue >= 10 ? scaledValue.toFixed(0) : scaledValue.toFixed(1)}M`;
+        }
+
+        if (value >= 1_000) {
+            const scaledValue = value / 1_000;
+            return `${scaledValue >= 10 ? scaledValue.toFixed(0) : scaledValue.toFixed(1)}K`;
+        }
+
+        return `${Math.round(value)}`;
     }
 
     private drawPostSlider(index: number) {

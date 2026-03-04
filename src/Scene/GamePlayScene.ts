@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GameConfig } from '../Managers/GameConfig';
 import { LoaderOverlay } from '../Systems/LoaderOverlay';
 import { WorldManager } from '../Managers/WorldManager';
+import { hasCoarsePointerDevice } from '../Utils/hasCoarsePointerDevice';
 
 export class GamePlayScene {
   private readonly container: HTMLElement;
@@ -11,9 +12,9 @@ export class GamePlayScene {
   private readonly loaderOverlay: LoaderOverlay;
   private readonly frameClock = new THREE.Clock();
   private readonly frameDuration = GameConfig.Fps > 0 ? 1 / GameConfig.Fps : 0;
-  private readonly isCoarsePointerDevice =
-    window.matchMedia('(pointer: coarse)').matches || navigator.maxTouchPoints > 0;
+  private readonly isCoarsePointerDevice = hasCoarsePointerDevice();
   private accumulatedFrameTime = 0;
+  private isDisposed = false;
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -50,10 +51,35 @@ export class GamePlayScene {
   }
 
   start() {
+    if (this.isDisposed) {
+      return;
+    }
+
     this.renderer.setAnimationLoop(this.renderFrame);
   }
 
+  dispose() {
+    if (this.isDisposed) {
+      return;
+    }
+
+    this.isDisposed = true;
+    this.renderer.setAnimationLoop(null);
+    window.removeEventListener('resize', this.handleResize);
+    this.worldManager.dispose();
+    this.loaderOverlay.dispose();
+    this.renderer.dispose();
+
+    if (this.renderer.domElement.parentElement === this.container) {
+      this.container.removeChild(this.renderer.domElement);
+    }
+  }
+
   private readonly handleResize = () => {
+    if (this.isDisposed) {
+      return;
+    }
+
     const width = window.innerWidth;
     const height = window.innerHeight;
 
@@ -63,6 +89,10 @@ export class GamePlayScene {
   };
 
   private readonly renderFrame = () => {
+    if (this.isDisposed) {
+      return;
+    }
+
     const rawDeltaSeconds = this.frameClock.getDelta();
     const deltaSeconds = this.getFrameDelta(rawDeltaSeconds);
 
