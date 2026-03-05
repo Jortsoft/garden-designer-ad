@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { Ground } from '../Entities/Ground';
+import { Land } from '../Entities/Land';
 import { PlaceHolder } from '../Entities/PlaceHolder';
 import { DebugManager } from './DebugManager';
 import { GroundPlacementDebugManager } from './GroundPlacementDebugManager';
 import { LightingManager } from './LightingManager';
+import { PlaceHolderActivationManager } from './PlaceHolderActivationManager';
 import { PostProcessingManager } from './PostProcessingManager';
 import { CameraController } from '../Systems/CameraController';
 import { WindWaveSystem } from '../Effects/WindWaveEffect';
@@ -12,6 +14,7 @@ import { PlaceVegetablesUI } from '../UI/PlaceVegetablesUI';
 export class WorldManager {
     private readonly root = new THREE.Group();
     private readonly ground: Ground;
+    private readonly land: Land;
     private readonly placeHolder: PlaceHolder;
     private readonly windWaveSystem: WindWaveSystem;
     private readonly scene: THREE.Scene;
@@ -20,6 +23,7 @@ export class WorldManager {
     private readonly cameraController: CameraController;
     private readonly debugManager: DebugManager;
     private readonly groundPlacementDebugManager: GroundPlacementDebugManager;
+    private readonly placeHolderActivationManager: PlaceHolderActivationManager;
     private readonly placeVegetablesUI: PlaceVegetablesUI;
     readonly camera: THREE.PerspectiveCamera;
 
@@ -31,6 +35,7 @@ export class WorldManager {
         this.scene = scene;
         this.camera = new THREE.PerspectiveCamera(55, 1, 0.01, 160);
         this.ground = new Ground(renderer.capabilities.getMaxAnisotropy());
+        this.land = new Land(renderer.capabilities.getMaxAnisotropy());
         this.placeHolder = new PlaceHolder(renderer.capabilities.getMaxAnisotropy());
         this.windWaveSystem = new WindWaveSystem();
         this.lightingManager = new LightingManager(this.scene);
@@ -46,22 +51,29 @@ export class WorldManager {
             this.postProcessingManager,
         );
         this.placeVegetablesUI = new PlaceVegetablesUI(inputElement, renderer);
+        const isInputBlockedByOverlay = (screenX: number, screenY: number) =>
+            this.debugManager.isScreenPointBlocked(screenX, screenY) ||
+            this.placeVegetablesUI.isScreenPointBlocked(screenX, screenY);
         this.cameraController = new CameraController(
             this.camera,
             inputElement,
-            (screenX, screenY) =>
-                this.debugManager.isScreenPointBlocked(screenX, screenY) ||
-                this.placeVegetablesUI.isScreenPointBlocked(screenX, screenY),
+            isInputBlockedByOverlay,
         );
         this.groundPlacementDebugManager = new GroundPlacementDebugManager(
             this.camera,
             this.ground,
             inputElement,
-            (screenX, screenY) =>
-                this.debugManager.isScreenPointBlocked(screenX, screenY) ||
-                this.placeVegetablesUI.isScreenPointBlocked(screenX, screenY),
+            isInputBlockedByOverlay,
+        );
+        this.placeHolderActivationManager = new PlaceHolderActivationManager(
+            this.camera,
+            this.placeHolder,
+            inputElement,
+            () => this.placeVegetablesUI.show(),
+            isInputBlockedByOverlay,
         );
         this.root.add(this.ground);
+        this.root.add(this.land);
         this.root.add(this.placeHolder);
         this.root.add(this.windWaveSystem);
         this.scene.add(this.camera);
@@ -73,9 +85,11 @@ export class WorldManager {
         this.debugManager.initialize();
         this.cameraController.initialize();
         this.groundPlacementDebugManager.initialize(this.root);
+        this.placeHolderActivationManager.initialize();
         this.windWaveSystem.initialize();
         return Promise.all([
             this.ground.load(),
+            this.land.load(),
             this.placeHolder.load(),
             this.placeVegetablesUI.initialize(),
         ]).then(() => undefined);
@@ -106,10 +120,12 @@ export class WorldManager {
     dispose() {
         this.cameraController.dispose();
         this.groundPlacementDebugManager.dispose();
+        this.placeHolderActivationManager.dispose();
         this.debugManager.dispose();
         this.postProcessingManager.dispose();
         this.lightingManager.dispose();
         this.windWaveSystem.dispose();
+        this.land.dispose();
         this.placeHolder.dispose();
         this.placeVegetablesUI.dispose();
         this.root.clear();

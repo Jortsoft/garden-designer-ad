@@ -1,19 +1,31 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { GameConfig } from '../Managers/GameConfig';
 import { applyPlaceHolderInteractionShader } from '../Shaders/PlaceHolder.shader';
 
 const PLACEHOLDER_MODEL_PATH = 'assets/gltf/placeholder.glb';
-const PLACEHOLDER_POSITION = new THREE.Vector3(0.536, 0.087, 1.741);
+const PLACEHOLDER_POSITION = new THREE.Vector3(0.536, 0.09, 1.741);
 const PLACEHOLDER_SCALE = 0.02;
 const PLACEHOLDER_ROTATION_DEGREES = new THREE.Vector3(0, 90, 0);
+const MIN_HIT_AREA_AXIS = 0.001;
+const HIT_AREA_PADDING = 0.12;
 
 export class PlaceHolder extends THREE.Group {
     private readonly loader = new GLTFLoader();
     private readonly maxTextureAnisotropy: number;
     private readonly interactionTimeUniforms: Array<{ value: number }> = [];
     private readonly preparedMaterials = new WeakSet<THREE.Material>();
+    private readonly shouldShowInteractionHitOutline = GameConfig.debugMode;
     private loadPromise: Promise<void> | null = null;
     private model: THREE.Object3D | null = null;
+    private interactionHitArea:
+        | THREE.Mesh<THREE.BoxGeometry, THREE.MeshBasicMaterial>
+        | null = null;
+    private interactionHitOutline:
+        | THREE.LineSegments<THREE.EdgesGeometry, THREE.LineBasicMaterial>
+        | null = null;
+    private readonly interactionHitBounds = new THREE.Box3();
+    private readonly interactionHitPoint = new THREE.Vector3();
     private isLoaded = false;
     private isLoading = false;
     private interactionTimeSeconds = 0;
@@ -43,6 +55,7 @@ export class PlaceHolder extends THREE.Group {
                 (gltf) => {
                     this.model = gltf.scene;
                     this.prepareModel(this.model);
+                    this.createInteractionHitArea(this.model);
                     this.add(this.model);
                     this.isLoaded = true;
                     this.isLoading = false;
@@ -71,6 +84,20 @@ export class PlaceHolder extends THREE.Group {
         }
     }
 
+    intersectsInteractionRay(ray: THREE.Ray) {
+        if (!this.interactionHitArea) {
+            return false;
+        }
+
+        this.interactionHitBounds.setFromObject(this.interactionHitArea);
+
+        if (this.interactionHitBounds.isEmpty()) {
+            return false;
+        }
+
+        return ray.intersectBox(this.interactionHitBounds, this.interactionHitPoint) !== null;
+    }
+
     dispose() {
         if (!this.model) {
             return;
@@ -86,7 +113,10 @@ export class PlaceHolder extends THREE.Group {
         });
 
         this.clear();
+        this.disposeInteractionHitDebugVisuals();
         this.model = null;
+        this.interactionHitArea = null;
+        this.interactionHitOutline = null;
         this.isLoaded = false;
         this.interactionTimeSeconds = 0;
         this.interactionTimeUniforms.length = 0;
@@ -111,6 +141,88 @@ export class PlaceHolder extends THREE.Group {
         });
 
         this.normalizeModelPivot(model);
+    }
+
+    private createInteractionHitArea(model: THREE.Object3D) {
+        if (this.interactionHitArea) {
+            this.interactionHitArea.geometry.dispose();
+            this.interactionHitArea.material.dispose();
+            this.interactionHitArea.parent?.remove(this.interactionHitArea);
+            this.interactionHitArea = null;
+        }
+
+        this.disposeInteractionHitDebugVisuals();
+
+        const bounds = new THREE.Box3().setFromObject(model);
+
+        if (bounds.isEmpty()) {
+            return;
+        }
+
+        bounds.expandByScalar(HIT_AREA_PADDING);
+
+        const size = new THREE.Vector3();
+        const center = new THREE.Vector3();
+        bounds.getSize(size);
+        bounds.getCenter(center);
+        model.updateWorldMatrix(true, false);
+        model.worldToLocal(center);
+
+        const geometry = new THREE.BoxGeometry(
+            Math.max(size.x, MIN_HIT_AREA_AXIS),
+            Math.max(size.y, MIN_HIT_AREA_AXIS),
+            Math.max(size.z, MIN_HIT_AREA_AXIS),
+        );
+        const material = new THREE.MeshBasicMaterial({
+            color: '#ffffff',
+            transparent: true,
+            opacity: 0,
+            depthTest: false,
+            depthWrite: false,
+        });
+        material.colorWrite = false;
+        material.toneMapped = false;
+
+        const hitAreaMesh = new THREE.Mesh(geometry, material);
+        hitAreaMesh.name = 'PlaceHolderHitArea';
+        hitAreaMesh.position.copy(center);
+        hitAreaMesh.renderOrder = 1;
+        hitAreaMesh.frustumCulled = false;
+        model.add(hitAreaMesh);
+        this.interactionHitArea = hitAreaMesh;
+
+        if (!this.shouldShowInteractionHitOutline) {
+            return;
+        }
+
+        const outlineGeometry = new THREE.EdgesGeometry(geometry);
+        const outlineMaterial = new THREE.LineBasicMaterial({
+            color: '#ff2b2b',
+            transparent: true,
+            opacity: 0.98,
+            depthTest: false,
+            depthWrite: false,
+        });
+        outlineMaterial.toneMapped = false;
+
+        const hitOutline = new THREE.LineSegments(outlineGeometry, outlineMaterial);
+        hitOutline.name = 'PlaceHolderHitAreaOutline';
+        hitOutline.position.copy(center);
+        hitOutline.renderOrder = hitAreaMesh.renderOrder + 1;
+        hitOutline.frustumCulled = false;
+        model.add(hitOutline);
+        this.interactionHitOutline = hitOutline;
+    }
+
+    private disposeInteractionHitDebugVisuals() {
+        if (!this.interactionHitOutline) {
+            return;
+        }
+
+        this.interactionHitOutline.geometry.dispose();
+        this.interactionHitOutline.material.dispose();
+        this.interactionHitOutline.parent?.remove(this.interactionHitOutline);
+        this.interactionHitOutline = null;
     }
 
     private normalizeModelPivot(model: THREE.Object3D) {

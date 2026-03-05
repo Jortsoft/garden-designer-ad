@@ -53,6 +53,11 @@ export class OverlayContainerUI {
     private title: string;
     private panelTexturePixelWidth = 0;
     private panelTexturePixelHeight = 0;
+    private panelWidth = 1;
+    private panelHeight = 1;
+    private panelCenterX = 0;
+    private panelCenterY = 0;
+    private panelScale = 1;
     private isDisposed = false;
 
     constructor(scene: THREE.Scene, options?: OverlayContainerUIOptions) {
@@ -93,12 +98,40 @@ export class OverlayContainerUI {
             return;
         }
 
-        const panelWidth = Math.max(1, width);
-        const panelHeight = Math.max(1, height);
+        this.panelWidth = Math.max(1, width);
+        this.panelHeight = Math.max(1, height);
+        this.panelCenterX = centerX;
+        this.panelCenterY = centerY;
 
-        this.syncPanelTexture(panelWidth, panelHeight);
-        this.panelMesh.scale.set(panelWidth, panelHeight, 1);
-        this.panelMesh.position.set(centerX, centerY, 0);
+        this.syncPanelTexture(this.panelWidth, this.panelHeight);
+        this.applyPanelTransform();
+    }
+
+    setTransform(centerX: number, centerY: number, scale = 1) {
+        if (this.isDisposed) {
+            return;
+        }
+
+        this.panelCenterX = centerX;
+        this.panelCenterY = centerY;
+        this.panelScale = Math.max(scale, 0);
+        this.applyPanelTransform();
+    }
+
+    setOpacity(opacity: number) {
+        if (this.isDisposed) {
+            return;
+        }
+
+        this.panelMesh.material.opacity = THREE.MathUtils.clamp(opacity, 0, 1);
+    }
+
+    setVisible(visible: boolean) {
+        if (this.isDisposed) {
+            return;
+        }
+
+        this.panelMesh.visible = visible;
     }
 
     setTitle(title: string) {
@@ -147,6 +180,15 @@ export class OverlayContainerUI {
         this.panelCanvas.width = targetPixelWidth;
         this.panelCanvas.height = targetPixelHeight;
         this.redrawPanelTexture();
+    }
+
+    private applyPanelTransform() {
+        this.panelMesh.scale.set(
+            this.panelWidth * this.panelScale,
+            this.panelHeight * this.panelScale,
+            1,
+        );
+        this.panelMesh.position.set(this.panelCenterX, this.panelCenterY, 0);
     }
 
     private redrawPanelTexture() {

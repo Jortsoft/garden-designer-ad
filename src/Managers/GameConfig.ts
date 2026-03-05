@@ -1,7 +1,7 @@
 import type { GameConfigModel } from "../Models/GameConfig.model";
 
 export const GameConfig: GameConfigModel = {
-    debugMode: true,
+    debugMode: false,
     Fps: 60,
     defaultCameraPosition: {
         x: 0.852,

@@ -1,33 +1,22 @@
 import * as THREE from 'three';
+import {
+    SHARED_UI_VISIBILITY_ANIMATION,
+    UIVisibilityAnimationController,
+    type UIVisibilityAnimationFrame,
+} from '../Animations/AnimationUI';
+import { PlantId, isPlantId } from '../Models/PlaceVegetable.model';
+import type {
+    PlantButton,
+    PlantOptionDefinition,
+    RoundedFrameTextureOptions,
+    SelectionVisualOptions,
+} from '../Models/PlaceVegetable.model';
 import { OverlayContainerUI } from './OverlayContainerUI';
 
-type PlantId = 'corn' | 'grape' | 'strawberry';
-
-interface PlantOptionDefinition {
-    readonly id: PlantId;
-    readonly texturePath: string;
-}
-
-interface PlantButton {
-    readonly id: PlantId;
-    readonly hitMesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-    readonly iconMesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-    readonly selectionMesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-    iconTexture: THREE.Texture | null;
-    baseButtonSize: number;
-    baseIconSize: number;
-    baseX: number;
-    baseY: number;
-    selectionBlend: number;
-    pulseTime: number;
-    popElapsed: number;
-    popDuration: number;
-}
-
 const PLANT_OPTIONS: readonly PlantOptionDefinition[] = [
-    { id: 'corn', texturePath: 'assets/images/corn.png' },
-    { id: 'grape', texturePath: 'assets/images/grape.png' },
-    { id: 'strawberry', texturePath: 'assets/images/strawberry.png' },
+    { id: PlantId.corn, texturePath: 'assets/images/corn.png' },
+    { id: PlantId.grape, texturePath: 'assets/images/grape.png' },
+    { id: PlantId.strawberry, texturePath: 'assets/images/strawberry.png' },
 ] as const;
 
 const PANEL_MAX_WIDTH = 560;
@@ -68,14 +57,21 @@ export class PlaceVegetablesUI {
     private readonly buttons: PlantButton[] = [];
     private readonly defaultButtonColor = new THREE.Color(BUTTON_BASE_COLOR);
     private readonly activeButtonColor = new THREE.Color(BUTTON_ACTIVE_COLOR);
+    private readonly visibilityAnimation = new UIVisibilityAnimationController(
+        SHARED_UI_VISIBILITY_ANIMATION,
+    );
 
-    private selectedPlantId: PlantId = 'corn';
+    private selectedPlantId: PlantId = PlantId.corn;
+    private visibilityFrame: UIVisibilityAnimationFrame = this.visibilityAnimation.getFrame();
     private viewportWidth = 1;
     private viewportHeight = 1;
     private panelScreenX = 0;
     private panelScreenY = 0;
     private panelScreenWidth = 0;
     private panelScreenHeight = 0;
+    private panelWidth = 1;
+    private panelHeight = 1;
+    private panelCenterY = 0;
     private isInitialized = false;
     private isDisposed = false;
     private loadPromise: Promise<void> | null = null;
@@ -84,6 +80,8 @@ export class PlaceVegetablesUI {
         this.inputElement = inputElement;
         this.renderer = renderer;
         this.overlayCamera.position.z = 1;
+        this.visibilityAnimation.hide(true);
+        this.visibilityFrame = this.visibilityAnimation.getFrame();
         this.overlayContainer = new OverlayContainerUI(
             this.overlayScene,
             OVERLAY_CONTAINER_OPTIONS,
@@ -130,12 +128,13 @@ export class PlaceVegetablesUI {
             this.inputElement.clientHeight || window.innerHeight,
         );
         this.loadPromise = this.loadPlantTextures();
+        this.refreshVisibilityState(0);
 
         return this.loadPromise;
     }
 
     render() {
-        if (!this.isInitialized || this.isDisposed) {
+        if (!this.isInitialized || this.isDisposed || !this.visibilityFrame.isRenderable) {
             return;
         }
 
@@ -149,6 +148,12 @@ export class PlaceVegetablesUI {
 
     update(deltaSeconds: number) {
         if (!this.isInitialized || this.isDisposed) {
+            return;
+        }
+
+        this.refreshVisibilityState(deltaSeconds);
+
+        if (!this.visibilityFrame.isRenderable) {
             return;
         }
 
@@ -169,7 +174,11 @@ export class PlaceVegetablesUI {
     }
 
     isScreenPointBlocked(screenX: number, screenY: number) {
-        if (!this.isInitialized || this.isDisposed) {
+        if (
+            !this.isInitialized ||
+            this.isDisposed ||
+            !this.visibilityFrame.isInteractive
+        ) {
             return false;
         }
 
@@ -183,6 +192,26 @@ export class PlaceVegetablesUI {
 
     getSelectedPlantId() {
         return this.selectedPlantId;
+    }
+
+    show() {
+        if (this.isDisposed) {
+            return;
+        }
+
+        this.visibilityAnimation.show();
+        this.refreshVisibilityState(0);
+        this.animateButtons(0);
+    }
+
+    hide() {
+        if (this.isDisposed) {
+            return;
+        }
+
+        this.visibilityAnimation.hide();
+        this.refreshVisibilityState(0);
+        this.animateButtons(0);
     }
 
     dispose() {
@@ -331,10 +360,9 @@ export class PlaceVegetablesUI {
         );
         const panelCenterY = -this.viewportHeight * 0.5 + marginBottom + panelHeight * 0.5;
 
-        this.panelScreenWidth = panelWidth;
-        this.panelScreenHeight = panelHeight;
-        this.panelScreenX = (this.viewportWidth - panelWidth) * 0.5;
-        this.panelScreenY = this.viewportHeight - marginBottom - panelHeight;
+        this.panelWidth = panelWidth;
+        this.panelHeight = panelHeight;
+        this.panelCenterY = panelCenterY;
         this.overlayContainer.layout(panelWidth, panelHeight, 0, panelCenterY);
 
         const horizontalPadding = panelWidth * 0.1;
@@ -360,10 +388,11 @@ export class PlaceVegetablesUI {
             button.baseY = buttonY;
         }
 
+        this.refreshVisibilityState(0);
         this.animateButtons(0);
     }
 
-    private applySelectionVisuals(options?: { snapToSelection?: boolean; triggerPop?: boolean }) {
+    private applySelectionVisuals(options?: SelectionVisualOptions) {
         const shouldSnapToSelection = options?.snapToSelection ?? false;
         const shouldTriggerPop = options?.triggerPop ?? false;
 
@@ -386,6 +415,26 @@ export class PlaceVegetablesUI {
         }
 
         this.animateButtons(0);
+    }
+
+    private refreshVisibilityState(deltaSeconds: number) {
+        this.visibilityAnimation.update(deltaSeconds);
+        this.visibilityFrame = this.visibilityAnimation.getFrame();
+
+        const animatedPanelCenterY = this.panelCenterY + this.visibilityFrame.offsetY;
+
+        this.overlayContainer.setVisible(this.visibilityFrame.isRenderable);
+        this.overlayContainer.setOpacity(this.visibilityFrame.opacity);
+        this.overlayContainer.setTransform(0, animatedPanelCenterY, this.visibilityFrame.scale);
+        this.updatePanelScreenBounds(animatedPanelCenterY);
+    }
+
+    private updatePanelScreenBounds(panelCenterY: number) {
+        this.panelScreenWidth = this.panelWidth * this.visibilityFrame.scale;
+        this.panelScreenHeight = this.panelHeight * this.visibilityFrame.scale;
+        this.panelScreenX = (this.viewportWidth - this.panelScreenWidth) * 0.5;
+        this.panelScreenY =
+            this.viewportHeight * 0.5 - (panelCenterY + this.panelScreenHeight * 0.5);
     }
 
     private readonly handlePointerDown = (event: PointerEvent) => {
@@ -435,23 +484,14 @@ export class PlaceVegetablesUI {
 
         const selectedId = intersections[0]?.object.userData?.plantId;
 
-        if (selectedId === 'corn' || selectedId === 'grape' || selectedId === 'strawberry') {
+        if (isPlantId(selectedId)) {
             return selectedId;
         }
 
         return null;
     }
 
-    private createRoundedFrameTexture(options: {
-        fillColor: string;
-        fillBottomColor?: string;
-        borderColor: string;
-        borderWidth: number;
-        gloss: boolean;
-        feather?: number;
-        innerStrokeColor?: string;
-        outerShadowColor?: string;
-    }) {
+    private createRoundedFrameTexture(options: RoundedFrameTextureOptions) {
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
 
@@ -495,14 +535,14 @@ export class PlaceVegetablesUI {
         context.fill();
         context.restore();
 
-        const fillBottomColor = options.fillBottomColor;
+        const fillBottomColor: string | undefined = options.fillBottomColor;
         const fillGradient = fillBottomColor
             ? context.createLinearGradient(0, rectY, 0, rectY + rectHeight)
             : null;
 
         if (fillGradient) {
             fillGradient.addColorStop(0, options.fillColor);
-            fillGradient.addColorStop(1, fillBottomColor);
+            fillGradient.addColorStop(1, fillBottomColor as string);
         }
 
         this.drawRoundedRect(
@@ -587,6 +627,10 @@ export class PlaceVegetablesUI {
         const blendFactor = hasFrameDelta
             ? 1 - Math.exp(-SELECTION_BLEND_SPEED * deltaSeconds)
             : 1;
+        const uiOpacity = this.visibilityFrame.opacity;
+        const uiScale = this.visibilityFrame.scale;
+        const uiVerticalOffset = this.visibilityFrame.offsetY;
+        const isUIRenderable = this.visibilityFrame.isRenderable;
 
         for (const button of this.buttons) {
             const isSelected = button.id === this.selectedPlantId;
@@ -613,10 +657,10 @@ export class PlaceVegetablesUI {
                 button.popDuration <= 0
                     ? 1
                     : THREE.MathUtils.clamp(
-                          button.popElapsed / button.popDuration,
-                          0,
-                          1,
-                      );
+                        button.popElapsed / button.popDuration,
+                        0,
+                        1,
+                    );
             const popAmount = Math.sin(popProgress * Math.PI) * (1 - popProgress) * 0.24;
             const pulseAmount = isSelected
                 ? Math.sin(button.pulseTime * SELECTION_PULSE_SPEED) * 0.016
@@ -627,39 +671,56 @@ export class PlaceVegetablesUI {
                 1 + button.selectionBlend * 0.1 + popAmount * 1.2 + pulseAmount * 0.9;
             const verticalLift = popAmount * button.baseButtonSize * 0.15;
 
-            button.selectionMesh.visible = button.selectionBlend > 0.01;
+            button.selectionMesh.visible = isUIRenderable && button.selectionBlend > 0.01;
             button.selectionMesh.scale.set(
-                button.baseButtonSize * 1.12 * (1 + popAmount * 0.45 + pulseAmount * 0.5),
-                button.baseButtonSize * 1.12 * (1 + popAmount * 0.45 + pulseAmount * 0.5),
+                button.baseButtonSize *
+                1.12 *
+                (1 + popAmount * 0.45 + pulseAmount * 0.5) *
+                uiScale,
+                button.baseButtonSize *
+                1.12 *
+                (1 + popAmount * 0.45 + pulseAmount * 0.5) *
+                uiScale,
                 1,
             );
             button.selectionMesh.position.set(
                 button.baseX,
-                button.baseY + verticalLift,
+                button.baseY + verticalLift + uiVerticalOffset,
                 0,
             );
             button.selectionMesh.material.opacity =
                 (0.08 + button.selectionBlend * 0.46) *
-                (isSelected ? 0.95 + Math.sin(button.pulseTime * 6.3) * 0.05 : 1);
+                (isSelected ? 0.95 + Math.sin(button.pulseTime * 6.3) * 0.05 : 1) *
+                uiOpacity;
 
+            button.hitMesh.visible = isUIRenderable;
             button.hitMesh.scale.set(
-                button.baseButtonSize * buttonScale,
-                button.baseButtonSize * buttonScale,
+                button.baseButtonSize * buttonScale * uiScale,
+                button.baseButtonSize * buttonScale * uiScale,
                 1,
             );
-            button.hitMesh.position.set(button.baseX, button.baseY + verticalLift, 0);
+            button.hitMesh.position.set(
+                button.baseX,
+                button.baseY + verticalLift + uiVerticalOffset,
+                0,
+            );
             button.hitMesh.material.color
                 .copy(this.defaultButtonColor)
                 .lerp(this.activeButtonColor, button.selectionBlend);
-            button.hitMesh.material.opacity = 0.88 + button.selectionBlend * 0.12;
+            button.hitMesh.material.opacity = (0.88 + button.selectionBlend * 0.12) * uiOpacity;
 
+            button.iconMesh.visible = isUIRenderable;
             button.iconMesh.scale.set(
-                button.baseIconSize * iconScale,
-                button.baseIconSize * iconScale,
+                button.baseIconSize * iconScale * uiScale,
+                button.baseIconSize * iconScale * uiScale,
                 1,
             );
-            button.iconMesh.position.set(button.baseX, button.baseY + verticalLift, 0);
-            button.iconMesh.material.opacity = 0.9 + button.selectionBlend * 0.1;
+            button.iconMesh.position.set(
+                button.baseX,
+                button.baseY + verticalLift + uiVerticalOffset,
+                0,
+            );
+            button.iconMesh.material.opacity = (0.9 + button.selectionBlend * 0.1) * uiOpacity;
         }
     }
 }
