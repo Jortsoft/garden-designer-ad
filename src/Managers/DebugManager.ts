@@ -59,6 +59,7 @@ export class DebugManager {
     private displayedFps = GameConfig.Fps;
     private shouldRefreshPerformanceSummary = true;
     private isWindowVisible = true;
+    private isInteractionLocked = false;
     private panelScreenX = 0;
     private panelScreenY = 0;
     private panelScreenWidth = 0;
@@ -210,6 +211,14 @@ export class DebugManager {
             height * 0.5 - PANEL_MARGIN - panelDisplayHeight * 0.5,
             0,
         );
+    }
+
+    setInteractionLocked(isLocked: boolean) {
+        this.isInteractionLocked = isLocked;
+
+        if (isLocked) {
+            this.activeSlider = null;
+        }
     }
 
     isScreenPointBlocked(screenX: number, screenY: number) {
@@ -523,6 +532,10 @@ export class DebugManager {
     }
 
     private readonly handlePointerDown = (event: PointerEvent) => {
+        if (this.isInteractionLocked) {
+            return;
+        }
+
         if (event.button !== 0) {
             return;
         }
@@ -541,12 +554,21 @@ export class DebugManager {
     };
 
     private readonly handlePointerMove = (event: PointerEvent) => {
+        if (this.isInteractionLocked) {
+            return;
+        }
+
         if (this.activeSlider) {
             this.updateActiveSlider(event.clientX);
         }
     };
 
     private readonly handlePointerUp = (event: PointerEvent) => {
+        if (this.isInteractionLocked) {
+            this.activeSlider = null;
+            return;
+        }
+
         if (event.button === 0) {
             this.activeSlider = null;
         }

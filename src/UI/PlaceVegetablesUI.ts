@@ -11,6 +11,7 @@ import type {
     RoundedFrameTextureOptions,
     SelectionVisualOptions,
 } from '../Models/PlaceVegetable.model';
+import { audioManager } from '../Managers/AudioManager';
 import { OverlayContainerUI } from './OverlayContainerUI';
 
 const PLANT_OPTIONS: readonly PlantOptionDefinition[] = [
@@ -546,6 +547,7 @@ export class PlaceVegetablesUI {
         }
 
         if (this.isInsidePlanButtonScreenPoint(event.clientX, event.clientY)) {
+            audioManager.playClick();
             this.onPlanRequested?.();
             return;
         }
@@ -556,6 +558,7 @@ export class PlaceVegetablesUI {
             return;
         }
 
+        audioManager.playClick();
         this.selectedPlantId = plantId;
         this.applySelectionVisuals({ triggerPop: true });
         this.onPlantSelected?.(plantId);

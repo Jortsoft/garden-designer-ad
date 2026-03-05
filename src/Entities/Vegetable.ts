@@ -15,6 +15,12 @@ const GROW_START_SCALE = 0.18;
 const GROW_BOUNCE_HEIGHT = 0.16;
 const GROW_WOBBLE_ANGLE = 0.13;
 const GROW_WOBBLE_FREQUENCY = 4.5;
+const HARVEST_ANIMATION_DURATION = 0.78;
+const HARVEST_ANIMATION_STAGGER = 0.06;
+const HARVEST_CUT_DROP = 0.06;
+const HARVEST_PULL_HEIGHT = 0.22;
+const HARVEST_LEAN_ANGLE = 0.5;
+const HARVEST_END_SCALE = 0.04;
 const WIND_SWAY_ROTATION_X = 0.035;
 const WIND_SWAY_ROTATION_Z = 0.07;
 const WIND_SWAY_POSITION_X = 0.014;
@@ -22,6 +28,9 @@ const WIND_SWAY_POSITION_Z = 0.009;
 const WIND_SWAY_POSITION_Y = 0.004;
 const WIND_SWAY_FREQ_A = 1.6;
 const WIND_SWAY_FREQ_B = 2.35;
+
+const GROWTH_LEVELS = [1, 2, 3] as const;
+export type VegetableGrowthLevel = (typeof GROWTH_LEVELS)[number];
 
 interface Vector3Like {
     readonly x: number;
@@ -31,12 +40,13 @@ interface Vector3Like {
 
 export interface VegetableOptions {
     readonly plantId: PlantId;
-    readonly modelPath: string;
+    readonly modelPathsByLevel: Record<VegetableGrowthLevel, string>;
     readonly maxTextureAnisotropy: number;
     readonly position?: Vector3Like;
     readonly rotationDegrees?: Vector3Like;
     readonly scale?: number;
     readonly slotOffsets?: readonly Vector3Like[];
+    readonly initialGrowthLevel?: VegetableGrowthLevel;
     readonly isVisibleInitially?: boolean;
 }
 
@@ -44,33 +54,38 @@ export class Vegetable extends THREE.Group {
     readonly plantId: PlantId;
 
     private readonly loader = new GLTFLoader();
-    private readonly modelPath: string;
+    private readonly modelPathsByLevel: Record<VegetableGrowthLevel, string>;
     private readonly maxTextureAnisotropy: number;
     private readonly preparedMaterials = new WeakSet<THREE.Material>();
     private readonly slotInstanceRoots: THREE.Group[] = [];
     private readonly slotBasePositions: THREE.Vector3[] = [];
+    private readonly sourceModelsByLevel = new Map<VegetableGrowthLevel, THREE.Object3D>();
     private readonly previewTimeUniform = { value: 0 };
     private readonly previewActiveUniform = { value: 0 };
     private readonly previewMinOpacityUniform = { value: PREVIEW_OPACITY_MIN };
     private readonly previewMaxOpacityUniform = { value: PREVIEW_OPACITY_MAX };
     private readonly previewPulseSpeedUniform = { value: PREVIEW_OPACITY_PULSE_SPEED };
     private loadPromise: Promise<void> | null = null;
-    private sourceModel: THREE.Object3D | null = null;
     private slotOffsets: THREE.Vector3[];
+    private activeGrowthLevel: VegetableGrowthLevel;
     private isLoaded = false;
     private isLoading = false;
     private isPreviewMode = false;
     private isGrowAnimationActive = false;
+    private isHarvestAnimationActive = false;
     private growElapsedSeconds = 0;
+    private harvestElapsedSeconds = 0;
     private windTimeSeconds = Math.random() * 100;
     private isWindSwayActive = false;
+    private onHarvestAnimationCompleted: (() => void) | null = null;
 
     constructor(options: VegetableOptions) {
         super();
         this.plantId = options.plantId;
         this.name = `Vegetable-${options.plantId}`;
-        this.modelPath = options.modelPath;
+        this.modelPathsByLevel = options.modelPathsByLevel;
         this.maxTextureAnisotropy = options.maxTextureAnisotropy;
+        this.activeGrowthLevel = options.initialGrowthLevel ?? 3;
 
         const position = options.position ?? DEFAULT_POSITION;
         const rotationDegrees = options.rotationDegrees ?? DEFAULT_ROTATION_DEGREES;
@@ -93,25 +108,27 @@ export class Vegetable extends THREE.Group {
         }
 
         this.isLoading = true;
-        this.loadPromise = new Promise((resolve, reject) => {
-            this.loader.load(
-                this.modelPath,
-                (gltf) => {
-                    this.sourceModel = gltf.scene;
-                    this.prepareModel(this.sourceModel);
-                    this.rebuildSlotInstances();
-                    this.isLoaded = true;
-                    this.isLoading = false;
-                    resolve();
-                },
-                undefined,
-                (error) => {
-                    this.isLoading = false;
-                    console.error(`Failed to load vegetable model: ${this.modelPath}`, error);
-                    reject(error);
-                },
-            );
-        });
+        this.loadPromise = Promise.all(
+            GROWTH_LEVELS.map(async (level) => ({
+                level,
+                model: await this.loadModel(this.modelPathsByLevel[level]),
+            })),
+        )
+            .then((entries) => {
+                for (const entry of entries) {
+                    this.prepareModel(entry.model);
+                    this.sourceModelsByLevel.set(entry.level, entry.model);
+                }
+
+                this.rebuildSlotInstances();
+                this.isLoaded = true;
+                this.isLoading = false;
+            })
+            .catch((error) => {
+                this.isLoading = false;
+                console.error(`Failed to load vegetable models: ${this.plantId}`, error);
+                throw error;
+            });
 
         return this.loadPromise;
     }
@@ -122,6 +139,7 @@ export class Vegetable extends THREE.Group {
         if (!isShown) {
             this.previewActiveUniform.value = 0;
             this.stopGrowAnimation();
+            this.stopHarvestAnimation(false);
             this.stopWindSway();
         } else if (this.isPreviewMode) {
             this.previewActiveUniform.value = 1;
@@ -131,7 +149,35 @@ export class Vegetable extends THREE.Group {
     setSlotOffsets(slotOffsets: readonly Vector3Like[]) {
         this.slotOffsets = this.normalizeSlotOffsets(slotOffsets);
 
-        if (!this.isLoaded || !this.sourceModel) {
+        if (!this.isLoaded) {
+            return;
+        }
+
+        this.rebuildSlotInstances();
+    }
+
+    getSlotWorldPositions() {
+        this.updateWorldMatrix(true, false);
+
+        if (this.slotBasePositions.length === 0) {
+            return [this.getWorldPosition(new THREE.Vector3())];
+        }
+
+        return this.slotBasePositions.map((basePosition) =>
+            this.localToWorld(basePosition.clone()),
+        );
+    }
+
+    setGrowthLevel(level: VegetableGrowthLevel) {
+        if (this.activeGrowthLevel === level) {
+            return;
+        }
+
+        this.activeGrowthLevel = level;
+        this.stopGrowAnimation();
+        this.stopHarvestAnimation(false);
+
+        if (!this.isLoaded) {
             return;
         }
 
@@ -158,10 +204,27 @@ export class Vegetable extends THREE.Group {
             return;
         }
 
+        this.stopHarvestAnimation(false);
         this.isGrowAnimationActive = true;
         this.growElapsedSeconds = 0;
         this.previewActiveUniform.value = 0;
         this.applyGrowAnimationFrame(0);
+    }
+
+    playHarvestAnimation(onCompleted?: () => void) {
+        if (!this.isLoaded || this.slotInstanceRoots.length === 0) {
+            onCompleted?.();
+            return;
+        }
+
+        this.stopGrowAnimation();
+        this.stopWindSway();
+        this.isPreviewMode = false;
+        this.previewActiveUniform.value = 0;
+        this.isHarvestAnimationActive = true;
+        this.harvestElapsedSeconds = 0;
+        this.onHarvestAnimationCompleted = onCompleted ?? null;
+        this.applyHarvestAnimationFrame(0);
     }
 
     update(deltaSeconds: number) {
@@ -174,6 +237,11 @@ export class Vegetable extends THREE.Group {
             this.applyGrowAnimationFrame(this.growElapsedSeconds);
         }
 
+        if (this.isHarvestAnimationActive) {
+            this.harvestElapsedSeconds += Math.max(0, deltaSeconds);
+            this.applyHarvestAnimationFrame(this.harvestElapsedSeconds);
+        }
+
         if (!this.visible || !this.isPreviewMode) {
             this.previewActiveUniform.value = 0;
         } else {
@@ -184,7 +252,8 @@ export class Vegetable extends THREE.Group {
         const shouldApplyWindSway =
             this.visible &&
             !this.isPreviewMode &&
-            !this.isGrowAnimationActive;
+            !this.isGrowAnimationActive &&
+            !this.isHarvestAnimationActive;
 
         if (!shouldApplyWindSway) {
             this.stopWindSway();
@@ -195,32 +264,49 @@ export class Vegetable extends THREE.Group {
     }
 
     dispose() {
-        if (!this.sourceModel) {
+        if (this.sourceModelsByLevel.size === 0) {
             return;
         }
 
-        this.sourceModel.traverse((child) => {
-            if (!(child instanceof THREE.Mesh)) {
-                return;
-            }
-
-            child.geometry.dispose();
-            this.disposeMaterial(child.material);
-        });
-
         this.clear();
+
+        for (const sourceModel of this.sourceModelsByLevel.values()) {
+            sourceModel.traverse((child) => {
+                if (!(child instanceof THREE.Mesh)) {
+                    return;
+                }
+
+                child.geometry.dispose();
+                this.disposeMaterial(child.material);
+            });
+        }
+
+        this.sourceModelsByLevel.clear();
         this.slotInstanceRoots.length = 0;
         this.slotBasePositions.length = 0;
-        this.sourceModel = null;
         this.isLoaded = false;
         this.isLoading = false;
         this.loadPromise = null;
         this.isPreviewMode = false;
         this.isGrowAnimationActive = false;
+        this.isHarvestAnimationActive = false;
         this.growElapsedSeconds = 0;
+        this.harvestElapsedSeconds = 0;
         this.isWindSwayActive = false;
+        this.onHarvestAnimationCompleted = null;
         this.previewTimeUniform.value = 0;
         this.previewActiveUniform.value = 0;
+    }
+
+    private loadModel(modelPath: string) {
+        return new Promise<THREE.Object3D>((resolve, reject) => {
+            this.loader.load(
+                modelPath,
+                (gltf) => resolve(gltf.scene),
+                undefined,
+                (error) => reject(error),
+            );
+        });
     }
 
     private normalizeSlotOffsets(slotOffsets?: readonly Vector3Like[]) {
@@ -232,7 +318,9 @@ export class Vegetable extends THREE.Group {
     }
 
     private rebuildSlotInstances() {
-        if (!this.sourceModel) {
+        const sourceModel = this.sourceModelsByLevel.get(this.activeGrowthLevel);
+
+        if (!sourceModel) {
             return;
         }
 
@@ -252,8 +340,8 @@ export class Vegetable extends THREE.Group {
 
             const slotModel =
                 slotIndex === 0
-                    ? this.sourceModel
-                    : this.sourceModel.clone(true);
+                    ? sourceModel
+                    : sourceModel.clone(true);
             slotInstanceRoot.add(slotModel);
             this.slotInstanceRoots.push(slotInstanceRoot);
             this.slotBasePositions.push(slotOffset.clone());
@@ -445,6 +533,7 @@ export class Vegetable extends THREE.Group {
             slotRoot.position.copy(basePosition);
             slotRoot.scale.setScalar(1);
             slotRoot.rotation.set(0, 0, 0);
+            this.setSlotRootOpacity(slotRoot, 1);
         }
     }
 
@@ -452,6 +541,60 @@ export class Vegetable extends THREE.Group {
         this.isGrowAnimationActive = false;
         this.growElapsedSeconds = 0;
         this.resetSlotTransforms();
+    }
+
+    private applyHarvestAnimationFrame(elapsedSeconds: number) {
+        let isAnimating = false;
+
+        for (let index = 0; index < this.slotInstanceRoots.length; index += 1) {
+            const slotRoot = this.slotInstanceRoots[index];
+            const basePosition = this.slotBasePositions[index];
+            const localElapsed = elapsedSeconds - index * HARVEST_ANIMATION_STAGGER;
+
+            if (!basePosition) {
+                continue;
+            }
+
+            if (localElapsed <= 0) {
+                isAnimating = true;
+                slotRoot.position.copy(basePosition);
+                slotRoot.scale.setScalar(1);
+                slotRoot.rotation.set(0, 0, 0);
+                this.setSlotRootOpacity(slotRoot, 1);
+                continue;
+            }
+
+            const progress = THREE.MathUtils.clamp(
+                localElapsed / HARVEST_ANIMATION_DURATION,
+                0,
+                1,
+            );
+
+            if (progress < 1) {
+                isAnimating = true;
+            }
+
+            const cutProgress = THREE.MathUtils.clamp(progress / 0.35, 0, 1);
+            const pullProgress = THREE.MathUtils.clamp((progress - 0.2) / 0.8, 0, 1);
+            const cutImpact = Math.sin(cutProgress * Math.PI);
+            const pullUp = this.easeOutCubic(pullProgress) * HARVEST_PULL_HEIGHT;
+            const shrinkProgress = this.easeInCubic(progress);
+            const scale = THREE.MathUtils.lerp(1, HARVEST_END_SCALE, shrinkProgress);
+            const opacity = THREE.MathUtils.lerp(1, 0, shrinkProgress);
+            const lean = -HARVEST_LEAN_ANGLE * (0.4 + 0.6 * cutProgress);
+
+            slotRoot.position.copy(basePosition);
+            slotRoot.position.y += pullUp - cutImpact * HARVEST_CUT_DROP;
+            slotRoot.scale.setScalar(scale);
+            slotRoot.rotation.set(0, 0, lean);
+            this.setSlotRootOpacity(slotRoot, opacity);
+        }
+
+        if (isAnimating) {
+            return;
+        }
+
+        this.stopHarvestAnimation(true);
     }
 
     private applyWindSwayFrame(deltaSeconds: number) {
@@ -496,6 +639,19 @@ export class Vegetable extends THREE.Group {
         this.resetSlotTransforms();
     }
 
+    private stopHarvestAnimation(shouldNotifyComplete: boolean) {
+        this.isHarvestAnimationActive = false;
+        this.harvestElapsedSeconds = 0;
+        this.resetSlotTransforms();
+
+        const onCompleted = this.onHarvestAnimationCompleted;
+        this.onHarvestAnimationCompleted = null;
+
+        if (shouldNotifyComplete) {
+            onCompleted?.();
+        }
+    }
+
     private easeOutBack(value: number) {
         const t = THREE.MathUtils.clamp(value, 0, 1);
         const c1 = 1.70158;
@@ -503,5 +659,45 @@ export class Vegetable extends THREE.Group {
         const shifted = t - 1;
 
         return 1 + c3 * shifted * shifted * shifted + c1 * shifted * shifted;
+    }
+
+    private easeOutCubic(value: number) {
+        const t = THREE.MathUtils.clamp(value, 0, 1);
+        const inverse = 1 - t;
+
+        return 1 - inverse * inverse * inverse;
+    }
+
+    private easeInCubic(value: number) {
+        const t = THREE.MathUtils.clamp(value, 0, 1);
+
+        return t * t * t;
+    }
+
+    private setSlotRootOpacity(slotRoot: THREE.Object3D, opacity: number) {
+        const clampedOpacity = THREE.MathUtils.clamp(opacity, 0, 1);
+
+        slotRoot.traverse((child) => {
+            if (!(child instanceof THREE.Mesh)) {
+                return;
+            }
+
+            this.setMaterialOpacity(child.material, clampedOpacity);
+        });
+    }
+
+    private setMaterialOpacity(
+        material: THREE.Material | THREE.Material[],
+        opacity: number,
+    ) {
+        if (Array.isArray(material)) {
+            for (const entry of material) {
+                this.setMaterialOpacity(entry, opacity);
+            }
+
+            return;
+        }
+
+        material.opacity = opacity;
     }
 }

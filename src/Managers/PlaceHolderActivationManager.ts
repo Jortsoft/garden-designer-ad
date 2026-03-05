@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { PlaceHolder } from '../Entities/PlaceHolder';
+import { audioManager } from './AudioManager';
 
 const CLICK_MOVE_THRESHOLD = 6;
 
@@ -153,6 +154,7 @@ export class PlaceHolderActivationManager {
             return;
         }
 
+        audioManager.playClick();
         this.onActivate();
     }
 }
