@@ -32,6 +32,16 @@ const SELECTION_BLEND_SPEED = 11;
 const SELECTION_POP_DURATION = 0.26;
 const SELECTION_PULSE_SPEED = 7.2;
 const BUTTON_FRAME_TEXTURE_SIZE = 320;
+const PLAN_BUTTON_TEXTURE_WIDTH = 480;
+const PLAN_BUTTON_TEXTURE_HEIGHT = 220;
+const PLAN_BUTTON_MIN_WIDTH = 154;
+const PLAN_BUTTON_MAX_WIDTH = 212;
+const PLAN_BUTTON_MIN_HEIGHT = 56;
+const PLAN_BUTTON_MAX_HEIGHT = 74;
+const PLAN_BUTTON_OPACITY = 0.96;
+const PLAN_BUTTON_PULSE_SPEED = 3.8;
+const PLAN_BUTTON_PULSE_AMOUNT = 0.03;
+const PLAN_BUTTON_RENDER_ORDER = 1115;
 const OVERLAY_CONTAINER_OPTIONS = {
     title: 'Choose plant',
     theme: {
@@ -54,6 +64,8 @@ export class PlaceVegetablesUI {
     private readonly overlayContainer: OverlayContainerUI;
     private readonly buttonFrameTexture: THREE.CanvasTexture;
     private readonly selectionFrameTexture: THREE.CanvasTexture;
+    private readonly planButtonTexture: THREE.CanvasTexture;
+    private readonly planButtonMesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
     private readonly buttons: PlantButton[] = [];
     private readonly defaultButtonColor = new THREE.Color(BUTTON_BASE_COLOR);
     private readonly activeButtonColor = new THREE.Color(BUTTON_ACTIVE_COLOR);
@@ -69,12 +81,22 @@ export class PlaceVegetablesUI {
     private panelScreenY = 0;
     private panelScreenWidth = 0;
     private panelScreenHeight = 0;
+    private planButtonScreenX = 0;
+    private planButtonScreenY = 0;
+    private planButtonScreenWidth = 0;
+    private planButtonScreenHeight = 0;
     private panelWidth = 1;
     private panelHeight = 1;
     private panelCenterY = 0;
+    private planButtonWidth = 1;
+    private planButtonHeight = 1;
+    private planButtonCenterY = 0;
+    private planButtonPulseTime = 0;
     private isInitialized = false;
     private isDisposed = false;
     private loadPromise: Promise<void> | null = null;
+    private onPlantSelected: ((plantId: PlantId) => void) | null = null;
+    private onPlanRequested: (() => void) | null = null;
 
     constructor(inputElement: HTMLElement, renderer: THREE.WebGLRenderer) {
         this.inputElement = inputElement;
@@ -106,6 +128,24 @@ export class PlaceVegetablesUI {
             gloss: true,
             feather: 0.11,
         });
+        this.planButtonTexture = this.createPlanButtonTexture();
+
+        const planButtonMaterial = new THREE.MeshBasicMaterial({
+            map: this.planButtonTexture,
+            transparent: true,
+            opacity: PLAN_BUTTON_OPACITY,
+            depthTest: false,
+            depthWrite: false,
+        });
+        planButtonMaterial.toneMapped = false;
+        this.planButtonMesh = new THREE.Mesh(
+            new THREE.PlaneGeometry(1, 1),
+            planButtonMaterial,
+        );
+        this.planButtonMesh.userData.uiAction = 'plant';
+        this.planButtonMesh.renderOrder = PLAN_BUTTON_RENDER_ORDER;
+        this.planButtonMesh.position.z = 0.2;
+        this.overlayScene.add(this.planButtonMesh);
 
         this.createPlantButtons();
         this.applySelectionVisuals({ snapToSelection: true });
@@ -158,6 +198,7 @@ export class PlaceVegetablesUI {
         }
 
         this.animateButtons(deltaSeconds);
+        this.animatePlanButton(deltaSeconds);
     }
 
     updateViewport(width: number, height: number) {
@@ -182,16 +223,32 @@ export class PlaceVegetablesUI {
             return false;
         }
 
-        return (
+        const isInsidePanel = (
             screenX >= this.panelScreenX &&
             screenX <= this.panelScreenX + this.panelScreenWidth &&
             screenY >= this.panelScreenY &&
             screenY <= this.panelScreenY + this.panelScreenHeight
         );
+        const isInsidePlanButton = (
+            screenX >= this.planButtonScreenX &&
+            screenX <= this.planButtonScreenX + this.planButtonScreenWidth &&
+            screenY >= this.planButtonScreenY &&
+            screenY <= this.planButtonScreenY + this.planButtonScreenHeight
+        );
+
+        return isInsidePanel || isInsidePlanButton;
     }
 
     getSelectedPlantId() {
         return this.selectedPlantId;
+    }
+
+    setOnPlantSelected(handler: ((plantId: PlantId) => void) | null) {
+        this.onPlantSelected = handler;
+    }
+
+    setOnPlanRequested(handler: (() => void) | null) {
+        this.onPlanRequested = handler;
     }
 
     show() {
@@ -199,9 +256,14 @@ export class PlaceVegetablesUI {
             return;
         }
 
+        this.selectedPlantId = PlantId.corn;
+        this.applySelectionVisuals({ snapToSelection: true });
+        this.onPlantSelected?.(PlantId.corn);
+        this.planButtonPulseTime = 0;
         this.visibilityAnimation.show();
         this.refreshVisibilityState(0);
         this.animateButtons(0);
+        this.animatePlanButton(0);
     }
 
     hide() {
@@ -220,11 +282,17 @@ export class PlaceVegetablesUI {
         }
 
         this.isDisposed = true;
+        this.onPlantSelected = null;
+        this.onPlanRequested = null;
         this.inputElement.removeEventListener('pointerdown', this.handlePointerDown);
 
         this.overlayContainer.dispose();
         this.buttonFrameTexture.dispose();
         this.selectionFrameTexture.dispose();
+        this.planButtonTexture.dispose();
+        this.planButtonMesh.geometry.dispose();
+        this.planButtonMesh.material.dispose();
+        this.overlayScene.remove(this.planButtonMesh);
 
         for (const button of this.buttons) {
             button.hitMesh.geometry.dispose();
@@ -376,6 +444,17 @@ export class PlaceVegetablesUI {
         const totalButtonsWidth = buttonSize * 3 + buttonSpacing * 2;
         const startButtonX = -totalButtonsWidth * 0.5 + buttonSize * 0.5;
         const buttonY = panelCenterY - panelHeight * 0.12;
+        const planButtonWidth = THREE.MathUtils.clamp(
+            panelWidth * 0.32,
+            PLAN_BUTTON_MIN_WIDTH,
+            PLAN_BUTTON_MAX_WIDTH,
+        );
+        const planButtonHeight = THREE.MathUtils.clamp(
+            panelHeight * 0.42,
+            PLAN_BUTTON_MIN_HEIGHT,
+            PLAN_BUTTON_MAX_HEIGHT,
+        );
+        const planButtonCenterY = panelCenterY + panelHeight * 0.86;
 
         for (let index = 0; index < this.buttons.length; index += 1) {
             const button = this.buttons[index];
@@ -388,8 +467,13 @@ export class PlaceVegetablesUI {
             button.baseY = buttonY;
         }
 
+        this.planButtonWidth = planButtonWidth;
+        this.planButtonHeight = planButtonHeight;
+        this.planButtonCenterY = planButtonCenterY;
+
         this.refreshVisibilityState(0);
         this.animateButtons(0);
+        this.animatePlanButton(0);
     }
 
     private applySelectionVisuals(options?: SelectionVisualOptions) {
@@ -426,15 +510,26 @@ export class PlaceVegetablesUI {
         this.overlayContainer.setVisible(this.visibilityFrame.isRenderable);
         this.overlayContainer.setOpacity(this.visibilityFrame.opacity);
         this.overlayContainer.setTransform(0, animatedPanelCenterY, this.visibilityFrame.scale);
-        this.updatePanelScreenBounds(animatedPanelCenterY);
+        const animatedPlanButtonCenterY = this.planButtonCenterY + this.visibilityFrame.offsetY;
+        this.updatePanelScreenBounds(animatedPanelCenterY, animatedPlanButtonCenterY);
+
+        this.planButtonMesh.visible = this.visibilityFrame.isRenderable;
+        this.planButtonMesh.position.set(0, animatedPlanButtonCenterY, this.planButtonMesh.position.z);
     }
 
-    private updatePanelScreenBounds(panelCenterY: number) {
+    private updatePanelScreenBounds(panelCenterY: number, planButtonCenterY: number) {
         this.panelScreenWidth = this.panelWidth * this.visibilityFrame.scale;
         this.panelScreenHeight = this.panelHeight * this.visibilityFrame.scale;
         this.panelScreenX = (this.viewportWidth - this.panelScreenWidth) * 0.5;
         this.panelScreenY =
             this.viewportHeight * 0.5 - (panelCenterY + this.panelScreenHeight * 0.5);
+
+        this.planButtonScreenWidth = this.planButtonWidth * this.visibilityFrame.scale;
+        this.planButtonScreenHeight = this.planButtonHeight * this.visibilityFrame.scale;
+        this.planButtonScreenX = (this.viewportWidth - this.planButtonScreenWidth) * 0.5;
+        this.planButtonScreenY =
+            this.viewportHeight * 0.5 -
+            (planButtonCenterY + this.planButtonScreenHeight * 0.5);
     }
 
     private readonly handlePointerDown = (event: PointerEvent) => {
@@ -450,6 +545,11 @@ export class PlaceVegetablesUI {
             return;
         }
 
+        if (this.isInsidePlanButtonScreenPoint(event.clientX, event.clientY)) {
+            this.onPlanRequested?.();
+            return;
+        }
+
         const plantId = this.pickPlantAtScreenPoint(event.clientX, event.clientY);
 
         if (!plantId) {
@@ -458,6 +558,7 @@ export class PlaceVegetablesUI {
 
         this.selectedPlantId = plantId;
         this.applySelectionVisuals({ triggerPop: true });
+        this.onPlantSelected?.(plantId);
     };
 
     private pickPlantAtScreenPoint(screenX: number, screenY: number) {
@@ -489,6 +590,17 @@ export class PlaceVegetablesUI {
         }
 
         return null;
+    }
+
+    private isInsidePlanButtonScreenPoint(screenX: number, screenY: number) {
+        const hitPadding = 4;
+
+        return (
+            screenX >= this.planButtonScreenX - hitPadding &&
+            screenX <= this.planButtonScreenX + this.planButtonScreenWidth + hitPadding &&
+            screenY >= this.planButtonScreenY - hitPadding &&
+            screenY <= this.planButtonScreenY + this.planButtonScreenHeight + hitPadding
+        );
     }
 
     private createRoundedFrameTexture(options: RoundedFrameTextureOptions) {
@@ -599,6 +711,90 @@ export class PlaceVegetablesUI {
         return texture;
     }
 
+    private createPlanButtonTexture() {
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+
+        canvas.width = PLAN_BUTTON_TEXTURE_WIDTH;
+        canvas.height = PLAN_BUTTON_TEXTURE_HEIGHT;
+
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.colorSpace = THREE.SRGBColorSpace;
+        texture.generateMipmaps = true;
+        texture.minFilter = THREE.LinearMipmapLinearFilter;
+        texture.magFilter = THREE.LinearFilter;
+
+        if (!context) {
+            texture.needsUpdate = true;
+            return texture;
+        }
+
+        const width = canvas.width;
+        const height = canvas.height;
+        const padding = Math.round(height * 0.07);
+        const radius = Math.round(height * 0.26);
+        const x = padding;
+        const y = padding;
+        const buttonWidth = width - padding * 2;
+        const buttonHeight = height - padding * 2;
+
+        context.clearRect(0, 0, width, height);
+
+        context.save();
+        context.shadowColor = 'rgba(63, 36, 10, 0.36)';
+        context.shadowBlur = Math.round(height * 0.11);
+        context.shadowOffsetY = Math.round(height * 0.035);
+        this.drawRoundedRect(
+            context,
+            x + Math.round(height * 0.02),
+            y + Math.round(height * 0.018),
+            buttonWidth - Math.round(height * 0.04),
+            buttonHeight - Math.round(height * 0.04),
+            radius,
+        );
+        context.fillStyle = 'rgba(54, 37, 18, 0.34)';
+        context.fill();
+        context.restore();
+
+        const fillGradient = context.createLinearGradient(0, y, 0, y + buttonHeight);
+        fillGradient.addColorStop(0, 'rgba(249, 224, 152, 1)');
+        fillGradient.addColorStop(0.58, 'rgba(239, 188, 94, 1)');
+        fillGradient.addColorStop(1, 'rgba(214, 150, 63, 1)');
+
+        this.drawRoundedRect(context, x, y, buttonWidth, buttonHeight, radius);
+        context.fillStyle = fillGradient;
+        context.fill();
+
+        context.lineWidth = Math.max(5, Math.round(height * 0.034));
+        context.strokeStyle = 'rgba(255, 248, 230, 0.98)';
+        context.stroke();
+
+        context.lineWidth = Math.max(2, Math.round(height * 0.014));
+        context.strokeStyle = 'rgba(163, 98, 26, 0.94)';
+        this.drawRoundedRect(
+            context,
+            x + context.lineWidth,
+            y + context.lineWidth,
+            buttonWidth - context.lineWidth * 2,
+            buttonHeight - context.lineWidth * 2,
+            Math.max(12, Math.round(radius * 0.84)),
+        );
+        context.stroke();
+
+        context.font = `700 ${Math.round(height * 0.34)}px "Trebuchet MS", "Verdana", sans-serif`;
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        context.fillStyle = '#fffaf1';
+        context.strokeStyle = 'rgba(122, 65, 16, 0.88)';
+        context.lineWidth = Math.max(2, Math.round(height * 0.02));
+        context.strokeText('Plant', width * 0.5, height * 0.52);
+        context.fillText('Plant', width * 0.5, height * 0.52);
+
+        texture.needsUpdate = true;
+
+        return texture;
+    }
+
     private drawRoundedRect(
         context: CanvasRenderingContext2D,
         x: number,
@@ -620,6 +816,27 @@ export class PlaceVegetablesUI {
         context.lineTo(x, y + clampedRadius);
         context.quadraticCurveTo(x, y, x + clampedRadius, y);
         context.closePath();
+    }
+
+    private animatePlanButton(deltaSeconds: number) {
+        const hasFrameDelta = deltaSeconds > 0;
+        const uiOpacity = this.visibilityFrame.opacity;
+        const uiScale = this.visibilityFrame.scale;
+        const isUIRenderable = this.visibilityFrame.isRenderable;
+
+        if (hasFrameDelta) {
+            this.planButtonPulseTime += deltaSeconds;
+        }
+
+        const pulse = Math.sin(this.planButtonPulseTime * PLAN_BUTTON_PULSE_SPEED) * PLAN_BUTTON_PULSE_AMOUNT;
+        const scale = (1 + pulse) * uiScale;
+        this.planButtonMesh.visible = isUIRenderable;
+        this.planButtonMesh.scale.set(
+            this.planButtonWidth * scale,
+            this.planButtonHeight * scale,
+            1,
+        );
+        this.planButtonMesh.material.opacity = PLAN_BUTTON_OPACITY * uiOpacity;
     }
 
     private animateButtons(deltaSeconds: number) {

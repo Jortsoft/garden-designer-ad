@@ -10,8 +10,15 @@ const MIN_CAMERA_HEIGHT = 0.8;
 const MOUSE_PAN_BUTTON = 0;
 const MOUSE_LOOK_BUTTON = 2;
 const MAX_PITCH = Math.PI / 2 - 0.05;
+const DEFAULT_CAMERA_MOVE_DURATION = 0.55;
 
 type ScreenPointBlocker = (screenX: number, screenY: number) => boolean;
+export interface MoveCameraParams {
+    readonly x: number;
+    readonly y: number;
+    readonly z: number;
+    readonly durationSeconds?: number;
+}
 
 export class CameraController {
     private readonly camera: THREE.PerspectiveCamera;
@@ -26,6 +33,8 @@ export class CameraController {
     private readonly lookDirection = new THREE.Vector3();
     private readonly upAxis = new THREE.Vector3(0, 1, 0);
     private readonly rotationEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+    private readonly transitionStartPosition = new THREE.Vector3();
+    private readonly transitionTargetPosition = new THREE.Vector3();
     private readonly isDebugEnabled = GameConfig.debugMode;
 
     private isMousePanning = false;
@@ -34,6 +43,9 @@ export class CameraController {
     private lastPinchDistance = 0;
     private yaw = 0;
     private pitch = 0;
+    private isPositionTransitionActive = false;
+    private transitionElapsed = 0;
+    private transitionDuration = DEFAULT_CAMERA_MOVE_DURATION;
 
     constructor(
         camera: THREE.PerspectiveCamera,
@@ -68,6 +80,11 @@ export class CameraController {
     }
 
     update(deltaSeconds: number) {
+        if (this.isPositionTransitionActive) {
+            this.updatePositionTransition(deltaSeconds);
+            return;
+        }
+
         this.moveDirection.set(0, 0, 0);
         this.updateHorizontalAxes();
 
@@ -95,6 +112,29 @@ export class CameraController {
         this.camera.position.addScaledVector(this.moveDirection, KEYBOARD_PAN_SPEED * deltaSeconds);
         this.clampPanPosition();
         this.logCameraPositionIfDebug();
+    }
+
+    MoveCamera(params: MoveCameraParams) {
+        const transitionDuration = Number.isFinite(params.durationSeconds)
+            ? Math.max(0, params.durationSeconds ?? DEFAULT_CAMERA_MOVE_DURATION)
+            : DEFAULT_CAMERA_MOVE_DURATION;
+
+        this.transitionStartPosition.copy(this.camera.position);
+        this.transitionTargetPosition.set(params.x, params.y, params.z);
+        this.transitionElapsed = 0;
+        this.transitionDuration = transitionDuration;
+        this.resetInputStates();
+
+        if (transitionDuration <= Number.EPSILON) {
+            this.isPositionTransitionActive = false;
+            this.camera.position.copy(this.transitionTargetPosition);
+            this.clampPanPosition();
+            this.logCameraPositionIfDebug();
+            this.logCameraZoomIfDebug();
+            return;
+        }
+
+        this.isPositionTransitionActive = true;
     }
 
     dispose() {
@@ -140,6 +180,37 @@ export class CameraController {
 
     private isKeyActive(code: string) {
         return this.keyStates.get(code) === true;
+    }
+
+    private updatePositionTransition(deltaSeconds: number) {
+        const duration = Math.max(this.transitionDuration, Number.EPSILON);
+        this.transitionElapsed = Math.min(this.transitionElapsed + Math.max(0, deltaSeconds), duration);
+        const linearProgress = THREE.MathUtils.clamp(this.transitionElapsed / duration, 0, 1);
+        const easedProgress = this.easeOutCubic(linearProgress);
+
+        this.camera.position.lerpVectors(
+            this.transitionStartPosition,
+            this.transitionTargetPosition,
+            easedProgress,
+        );
+        this.clampPanPosition();
+
+        if (linearProgress < 1) {
+            return;
+        }
+
+        this.isPositionTransitionActive = false;
+        this.camera.position.copy(this.transitionTargetPosition);
+        this.clampPanPosition();
+        this.logCameraPositionIfDebug();
+        this.logCameraZoomIfDebug();
+    }
+
+    private easeOutCubic(value: number) {
+        const t = THREE.MathUtils.clamp(value, 0, 1);
+        const inverse = 1 - t;
+
+        return 1 - inverse * inverse * inverse;
     }
 
     private clampPanPosition() {
@@ -359,6 +430,10 @@ export class CameraController {
     }
 
     private readonly handlePointerDown = (event: PointerEvent) => {
+        if (this.isPositionTransitionActive) {
+            return;
+        }
+
         if (this.isInputBlocked(event.clientX, event.clientY)) {
             return;
         }
@@ -406,6 +481,10 @@ export class CameraController {
     };
 
     private readonly handlePointerMove = (event: PointerEvent) => {
+        if (this.isPositionTransitionActive) {
+            return;
+        }
+
         if (event.pointerType === 'mouse') {
             if (!this.isMousePanning && !this.isMouseLooking) {
                 return;
@@ -471,6 +550,10 @@ export class CameraController {
     };
 
     private readonly handlePointerUp = (event: PointerEvent) => {
+        if (this.isPositionTransitionActive) {
+            return;
+        }
+
         if (event.pointerType === 'mouse') {
             if (event.button === MOUSE_PAN_BUTTON) {
                 this.isMousePanning = false;
@@ -515,6 +598,10 @@ export class CameraController {
     };
 
     private readonly handleWheel = (event: WheelEvent) => {
+        if (this.isPositionTransitionActive) {
+            return;
+        }
+
         if (this.isInputBlocked(event.clientX, event.clientY)) {
             return;
         }
@@ -528,6 +615,10 @@ export class CameraController {
     };
 
     private readonly handleKeyDown = (event: KeyboardEvent) => {
+        if (this.isPositionTransitionActive) {
+            return;
+        }
+
         this.keyStates.set(event.code, true);
     };
 
@@ -536,11 +627,15 @@ export class CameraController {
     };
 
     private readonly handleWindowBlur = () => {
+        this.resetInputStates();
+    };
+
+    private resetInputStates() {
         this.keyStates.clear();
         this.isMousePanning = false;
         this.isMouseLooking = false;
         this.activeTouchPanId = null;
         this.lastPinchDistance = 0;
         this.touchPointers.clear();
-    };
+    }
 }

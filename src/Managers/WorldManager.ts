@@ -2,6 +2,8 @@ import * as THREE from 'three';
 import { Ground } from '../Entities/Ground';
 import { Land } from '../Entities/Land';
 import { PlaceHolder } from '../Entities/PlaceHolder';
+import { Vegetable } from '../Entities/Vegetable';
+import { PlantId } from '../Models/PlaceVegetable.model';
 import { DebugManager } from './DebugManager';
 import { GroundPlacementDebugManager } from './GroundPlacementDebugManager';
 import { LightingManager } from './LightingManager';
@@ -11,11 +13,24 @@ import { CameraController } from '../Systems/CameraController';
 import { WindWaveSystem } from '../Effects/WindWaveEffect';
 import { PlaceVegetablesUI } from '../UI/PlaceVegetablesUI';
 
+const VEGETABLE_MODEL_PATHS: Record<PlantId, string> = {
+    [PlantId.corn]: 'assets/gltf/corns/corn_level3.glb',
+    [PlantId.grape]: 'assets/gltf/grapes/grape_level3.glb',
+    [PlantId.strawberry]: 'assets/gltf/strawberys/strawbery_level3.glb',
+};
+const PLANTING_CAMERA_MOVE = {
+    x: 0.590,
+    y: 0.565,
+    z: 2.254,
+    durationSeconds: 0.55,
+} as const;
+
 export class WorldManager {
     private readonly root = new THREE.Group();
     private readonly ground: Ground;
     private readonly land: Land;
     private readonly placeHolder: PlaceHolder;
+    private readonly vegetables = new Map<PlantId, Vegetable>();
     private readonly windWaveSystem: WindWaveSystem;
     private readonly scene: THREE.Scene;
     private readonly lightingManager: LightingManager;
@@ -25,6 +40,8 @@ export class WorldManager {
     private readonly groundPlacementDebugManager: GroundPlacementDebugManager;
     private readonly placeHolderActivationManager: PlaceHolderActivationManager;
     private readonly placeVegetablesUI: PlaceVegetablesUI;
+    private selectedPlantId: PlantId | null = null;
+    private isPlantSelectionActive = false;
     readonly camera: THREE.PerspectiveCamera;
 
     constructor(
@@ -51,6 +68,9 @@ export class WorldManager {
             this.postProcessingManager,
         );
         this.placeVegetablesUI = new PlaceVegetablesUI(inputElement, renderer);
+        this.placeVegetablesUI.setOnPlantSelected(this.handlePlantSelected);
+        this.placeVegetablesUI.setOnPlanRequested(this.handlePlanRequested);
+        this.registerVegetables(renderer.capabilities.getMaxAnisotropy());
         const isInputBlockedByOverlay = (screenX: number, screenY: number) =>
             this.debugManager.isScreenPointBlocked(screenX, screenY) ||
             this.placeVegetablesUI.isScreenPointBlocked(screenX, screenY);
@@ -69,36 +89,56 @@ export class WorldManager {
             this.camera,
             this.placeHolder,
             inputElement,
-            () => this.placeVegetablesUI.show(),
+            () => {
+                this.isPlantSelectionActive = true;
+                this.placeVegetablesUI.show();
+                this.cameraController.MoveCamera(PLANTING_CAMERA_MOVE);
+            },
             isInputBlockedByOverlay,
         );
         this.root.add(this.ground);
         this.root.add(this.land);
+        for (const vegetable of this.vegetables.values()) {
+            this.root.add(vegetable);
+        }
         this.root.add(this.placeHolder);
         this.root.add(this.windWaveSystem);
         this.scene.add(this.camera);
         this.scene.add(this.root);
     }
 
-    initialize() {
+    async initialize() {
         this.lightingManager.initialize();
         this.debugManager.initialize();
         this.cameraController.initialize();
         this.groundPlacementDebugManager.initialize(this.root);
         this.placeHolderActivationManager.initialize();
         this.windWaveSystem.initialize();
-        return Promise.all([
+
+        await Promise.all([
             this.ground.load(),
             this.land.load(),
+        ]);
+
+        const landSlotOffsets = this.land.getSlotOffsets();
+        for (const vegetable of this.vegetables.values()) {
+            vegetable.setSlotOffsets(landSlotOffsets);
+        }
+
+        await Promise.all([
+            ...Array.from(this.vegetables.values(), (vegetable) => vegetable.load()),
             this.placeHolder.load(),
             this.placeVegetablesUI.initialize(),
-        ]).then(() => undefined);
+        ]);
     }
 
     update(deltaSeconds: number) {
         this.cameraController.update(deltaSeconds);
         this.placeHolder.update(deltaSeconds);
         this.windWaveSystem.update(deltaSeconds);
+        for (const vegetable of this.vegetables.values()) {
+            vegetable.update(deltaSeconds);
+        }
         this.placeVegetablesUI.update(deltaSeconds);
         this.debugManager.update(deltaSeconds);
     }
@@ -126,10 +166,61 @@ export class WorldManager {
         this.lightingManager.dispose();
         this.windWaveSystem.dispose();
         this.land.dispose();
+        for (const vegetable of this.vegetables.values()) {
+            vegetable.dispose();
+        }
+        this.vegetables.clear();
         this.placeHolder.dispose();
+        this.placeVegetablesUI.setOnPlantSelected(null);
+        this.placeVegetablesUI.setOnPlanRequested(null);
         this.placeVegetablesUI.dispose();
         this.root.clear();
         this.scene.remove(this.root);
         this.scene.remove(this.camera);
     }
+
+    private registerVegetables(maxTextureAnisotropy: number) {
+        for (const plantId of Object.values(PlantId)) {
+            const modelPath = VEGETABLE_MODEL_PATHS[plantId];
+
+            if (!modelPath) {
+                continue;
+            }
+
+            const vegetable = new Vegetable({
+                plantId,
+                modelPath,
+                maxTextureAnisotropy,
+                isVisibleInitially: false,
+            });
+
+            this.vegetables.set(plantId, vegetable);
+        }
+    }
+
+    private readonly handlePlantSelected = (plantId: PlantId) => {
+        this.selectedPlantId = plantId;
+        this.applyVegetablePlacementState();
+    };
+
+    private readonly handlePlanRequested = () => {
+        if (!this.selectedPlantId) {
+            return;
+        }
+
+        const selectedVegetable = this.vegetables.get(this.selectedPlantId) ?? null;
+        this.isPlantSelectionActive = false;
+        this.placeVegetablesUI.hide();
+        this.applyVegetablePlacementState();
+        selectedVegetable?.playGrowAnimation();
+    };
+
+    private applyVegetablePlacementState() {
+        for (const [entryPlantId, vegetable] of this.vegetables.entries()) {
+            const isSelectedPlant = this.selectedPlantId === entryPlantId;
+
+            vegetable.setShown(isSelectedPlant);
+            vegetable.setPreviewMode(isSelectedPlant && this.isPlantSelectionActive);
+        }
+    };
 }
