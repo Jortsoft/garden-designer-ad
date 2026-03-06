@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { GameConfig } from '../Managers/GameConfig';
+import type { MoveCameraParams } from '../Models/CameraController.model';
+import type { ScreenPointBlocker } from '../Models/Input.model';
 
 const KEYBOARD_PAN_SPEED = 3.2;
 const DRAG_PAN_SPEED = 0.0032;
@@ -11,14 +13,6 @@ const MOUSE_PAN_BUTTON = 0;
 const MOUSE_LOOK_BUTTON = 2;
 const MAX_PITCH = Math.PI / 2 - 0.05;
 const DEFAULT_CAMERA_MOVE_DURATION = 0.55;
-
-type ScreenPointBlocker = (screenX: number, screenY: number) => boolean;
-export interface MoveCameraParams {
-    readonly x: number;
-    readonly y: number;
-    readonly z: number;
-    readonly durationSeconds?: number;
-}
 
 export class CameraController {
     private readonly camera: THREE.PerspectiveCamera;

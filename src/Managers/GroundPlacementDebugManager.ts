@@ -1,12 +1,11 @@
 import * as THREE from 'three';
 import { GameConfig } from './GameConfig';
 import { Ground } from '../Entities/Ground';
+import type { ScreenPointBlocker } from '../Models/Input.model';
 
 const CLICK_MOVE_THRESHOLD = 6;
 const MARKER_RADIUS = 0.035;
 const MARKER_HEIGHT_OFFSET = 0.02;
-
-type ScreenPointBlocker = (screenX: number, screenY: number) => boolean;
 
 export class GroundPlacementDebugManager {
     private readonly camera: THREE.PerspectiveCamera;

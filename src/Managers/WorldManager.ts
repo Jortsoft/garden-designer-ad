@@ -2,14 +2,16 @@ import * as THREE from 'three';
 import { Ground } from '../Entities/Ground';
 import { Land } from '../Entities/Land';
 import { PlaceHolder } from '../Entities/PlaceHolder';
-import { Vegetable, type VegetableGrowthLevel } from '../Entities/Vegetable';
+import { Vegetable } from '../Entities/Vegetable';
 import { PlantId } from '../Models/PlaceVegetable.model';
+import type { VegetableGrowthLevel } from '../Models/Vegetable.model';
 import { DebugManager } from './DebugManager';
 import { GroundPlacementDebugManager } from './GroundPlacementDebugManager';
 import { LightingManager } from './LightingManager';
 import { PlaceHolderActivationManager } from './PlaceHolderActivationManager';
 import { PostProcessingManager } from './PostProcessingManager';
 import { CameraController } from '../Systems/CameraController';
+import { GameState } from '../Systems/GameState';
 import { WindWaveSystem } from '../Effects/WindWaveEffect';
 import { PlaceVegetablesUI } from '../UI/PlaceVegetablesUI';
 import { SkipDayUI } from '../UI/SkipDayUI';
@@ -73,13 +75,8 @@ export class WorldManager {
     private readonly skipDayUI: SkipDayUI;
     private readonly sickleUI: SickleUI;
     private readonly farmResourcesUI: FarmResourcesUI;
-    private selectedPlantId: PlantId | null = null;
-    private isPlantSelectionActive = false;
-    private isSkipDayCycleActive = false;
-    private isHarvestAnimationActive = false;
+    private readonly gameState = new GameState();
     private skipDayElapsedSeconds = 0;
-    private skipDayPlantId: PlantId | null = null;
-    private harvestPlantId: PlantId | null = null;
     private skipDayBaseSunX = 0;
     private skipDayBaseSunY = 0;
     private skipDayBaseSunIntensity = 0;
@@ -123,8 +120,7 @@ export class WorldManager {
         this.sickleUI.setOnHarvestRequested(this.handleHarvestRequested);
         this.registerVegetables(renderer.capabilities.getMaxAnisotropy());
         const isInputBlockedByOverlay = (screenX: number, screenY: number) =>
-            this.isSkipDayCycleActive ||
-            this.isHarvestAnimationActive ||
+            this.gameState.isInputFlowBlocked() ||
             this.debugManager.isScreenPointBlocked(screenX, screenY) ||
             this.placeVegetablesUI.isScreenPointBlocked(screenX, screenY) ||
             this.skipDayUI.isScreenPointBlocked(screenX, screenY) ||
@@ -145,23 +141,15 @@ export class WorldManager {
             this.placeHolder,
             inputElement,
             () => {
-                if (
-                    this.isSkipDayCycleActive ||
-                    this.isHarvestAnimationActive ||
-                    this.harvestPlantId !== null
-                ) {
-                    return;
-                }
-
-                this.isPlantSelectionActive = true;
-                this.skipDayPlantId = null;
-                this.harvestPlantId = null;
+                this.gameState.isPlantSelectionActive = true;
+                this.gameState.clearHarvestAndSkipTargets();
                 this.skipDayUI.hide();
                 this.sickleUI.hide();
                 this.placeVegetablesUI.show();
                 this.cameraController.MoveCamera(PLANTING_CAMERA_MOVE);
             },
             isInputBlockedByOverlay,
+            this.gameState,
         );
         this.root.add(this.ground);
         this.root.add(this.land);
@@ -207,7 +195,7 @@ export class WorldManager {
     update(deltaSeconds: number) {
         const simulationDeltaSeconds = deltaSeconds * this.getSimulationTimeScale();
 
-        if (!this.isSkipDayCycleActive && !this.isHarvestAnimationActive) {
+        if (!this.gameState.isInputFlowBlocked()) {
             this.cameraController.update(simulationDeltaSeconds);
         }
         this.placeHolder.update(simulationDeltaSeconds);
@@ -290,26 +278,26 @@ export class WorldManager {
     }
 
     private readonly handlePlantSelected = (plantId: PlantId) => {
-        this.selectedPlantId = plantId;
+        this.gameState.selectedPlantId = plantId;
         this.applyVegetablePlacementState();
     };
 
     private readonly handlePlanRequested = () => {
-        if (!this.selectedPlantId) {
+        if (!this.gameState.selectedPlantId) {
             return;
         }
 
-        const selectedVegetable = this.vegetables.get(this.selectedPlantId) ?? null;
+        const selectedVegetable = this.vegetables.get(this.gameState.selectedPlantId) ?? null;
         if (!selectedVegetable) {
             return;
         }
 
-        this.isPlantSelectionActive = false;
+        this.gameState.isPlantSelectionActive = false;
         this.placeVegetablesUI.hide();
         this.placeHolder.visible = false;
         selectedVegetable.setGrowthLevel(1);
-        this.skipDayPlantId = this.selectedPlantId;
-        this.harvestPlantId = null;
+        this.gameState.skipDayPlantId = this.gameState.selectedPlantId;
+        this.gameState.harvestPlantId = null;
         this.skipDayUI.setWorldOffset(SKIP_BUTTON_WORLD_OFFSET);
         this.sickleUI.hide();
         this.skipDayUI.show();
@@ -318,7 +306,7 @@ export class WorldManager {
     };
 
     private readonly handleSkipDayRequested = () => {
-        if (this.isSkipDayCycleActive || !this.skipDayPlantId) {
+        if (this.gameState.isSkipDayCycleActive || !this.gameState.skipDayPlantId) {
             return;
         }
 
@@ -326,29 +314,33 @@ export class WorldManager {
     };
 
     private readonly handleHarvestRequested = () => {
-        if (this.isSkipDayCycleActive || this.isHarvestAnimationActive || !this.harvestPlantId) {
+        if (
+            this.gameState.isSkipDayCycleActive ||
+            this.gameState.isHarvestAnimationActive ||
+            !this.gameState.harvestPlantId
+        ) {
             return;
         }
 
-        const harvestVegetable = this.vegetables.get(this.harvestPlantId) ?? null;
+        const harvestVegetable = this.vegetables.get(this.gameState.harvestPlantId) ?? null;
         if (!harvestVegetable) {
-            this.harvestPlantId = null;
+            this.gameState.harvestPlantId = null;
             this.sickleUI.hide();
             return;
         }
 
-        this.isHarvestAnimationActive = true;
+        this.gameState.isHarvestAnimationActive = true;
         this.sickleUI.hide();
         this.debugManager.setInteractionLocked(true);
         harvestVegetable.playHarvestAnimation(() => {
             const harvestedPlantId = harvestVegetable.plantId;
             const rewardStartWorldPositions = harvestVegetable.getSlotWorldPositions();
-            this.harvestPlantId = null;
-            this.skipDayPlantId = null;
-            if (this.selectedPlantId === harvestedPlantId) {
-                this.selectedPlantId = null;
+            this.gameState.harvestPlantId = null;
+            this.gameState.skipDayPlantId = null;
+            if (this.gameState.selectedPlantId === harvestedPlantId) {
+                this.gameState.selectedPlantId = null;
             }
-            this.isPlantSelectionActive = false;
+            this.gameState.isPlantSelectionActive = false;
             harvestVegetable.setShown(false);
             harvestVegetable.setPreviewMode(false);
             this.applyVegetablePlacementState();
@@ -361,7 +353,7 @@ export class WorldManager {
                     this.camera,
                 )
                 .finally(() => {
-                    this.isHarvestAnimationActive = false;
+                    this.gameState.isHarvestAnimationActive = false;
                     this.debugManager.setInteractionLocked(false);
                 });
         });
@@ -369,8 +361,8 @@ export class WorldManager {
 
     private applyVegetablePlacementState() {
         for (const [entryPlantId, vegetable] of this.vegetables.entries()) {
-            const isSelectedPlant = this.selectedPlantId === entryPlantId;
-            const isInSelectionPreview = isSelectedPlant && this.isPlantSelectionActive;
+            const isSelectedPlant = this.gameState.selectedPlantId === entryPlantId;
+            const isInSelectionPreview = isSelectedPlant && this.gameState.isPlantSelectionActive;
 
             if (isInSelectionPreview) {
                 vegetable.setGrowthLevel(3);
@@ -382,7 +374,7 @@ export class WorldManager {
     }
 
     private startSkipDayCycle() {
-        this.isSkipDayCycleActive = true;
+        this.gameState.isSkipDayCycleActive = true;
         this.skipDayElapsedSeconds = 0;
         this.skipDayUI.hide();
         this.sickleUI.hide();
@@ -397,7 +389,7 @@ export class WorldManager {
     }
 
     private updateSkipDayCycle(deltaSeconds: number) {
-        if (!this.isSkipDayCycleActive) {
+        if (!this.gameState.isSkipDayCycleActive) {
             return;
         }
 
@@ -412,8 +404,8 @@ export class WorldManager {
 
         this.applySkipDayLighting(cycleProgress);
 
-        const selectedVegetable = this.skipDayPlantId
-            ? (this.vegetables.get(this.skipDayPlantId) ?? null)
+        const selectedVegetable = this.gameState.skipDayPlantId
+            ? (this.vegetables.get(this.gameState.skipDayPlantId) ?? null)
             : null;
 
         if (selectedVegetable) {
@@ -482,9 +474,9 @@ export class WorldManager {
     }
 
     private completeSkipDayCycle() {
-        const completedPlantId = this.skipDayPlantId;
+        const completedPlantId = this.gameState.skipDayPlantId;
 
-        this.isSkipDayCycleActive = false;
+        this.gameState.isSkipDayCycleActive = false;
         this.skipDayElapsedSeconds = 0;
         this.debugManager.setInteractionLocked(false);
         this.lightingManager.setValue('sunX', this.skipDayBaseSunX);
@@ -493,7 +485,7 @@ export class WorldManager {
         this.lightingManager.setValue('ambientIntensity', this.skipDayBaseAmbientIntensity);
         this.postProcessingManager.setValue('exposure', this.skipDayBaseExposure);
         this.postProcessingManager.setValue('vignetteIntensity', this.skipDayBaseVignetteIntensity);
-        this.skipDayPlantId = null;
+        this.gameState.skipDayPlantId = null;
         this.skipDayUI.hide();
 
         if (completedPlantId) {
@@ -501,7 +493,7 @@ export class WorldManager {
 
             if (completedVegetable) {
                 completedVegetable.setGrowthLevel(3);
-                this.harvestPlantId = completedPlantId;
+                this.gameState.harvestPlantId = completedPlantId;
                 this.sickleUI.setWorldOffset(SKIP_BUTTON_WORLD_OFFSET);
                 this.sickleUI.show();
             }
@@ -509,7 +501,7 @@ export class WorldManager {
     }
 
     private getSimulationTimeScale() {
-        if (!this.isSkipDayCycleActive) {
+        if (!this.gameState.isSkipDayCycleActive) {
             return 1;
         }
 

@@ -1,41 +1,11 @@
 import * as THREE from 'three';
 import { PlantId } from '../Models/PlaceVegetable.model';
-
-interface ResourceDefinition {
-    readonly id: PlantId;
-    readonly iconPath: string;
-}
-
-interface ResourceEntry {
-    readonly id: PlantId;
-    readonly iconMesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-    readonly countMesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-    readonly countCanvas: HTMLCanvasElement;
-    readonly countContext: CanvasRenderingContext2D | null;
-    readonly countTexture: THREE.CanvasTexture;
-    iconTexture: THREE.Texture | null;
-    count: number;
-}
-
-interface ResourceGainBatch {
-    readonly plantId: PlantId;
-    pendingIcons: number;
-    resolve: () => void;
-}
-
-interface FlyingResourceIcon {
-    readonly plantId: PlantId;
-    readonly mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-    readonly start: THREE.Vector2;
-    readonly control: THREE.Vector2;
-    readonly end: THREE.Vector2;
-    readonly duration: number;
-    readonly delay: number;
-    readonly baseSize: number;
-    readonly batch: ResourceGainBatch;
-    elapsed: number;
-    isRewardApplied: boolean;
-}
+import type {
+    FlyingResourceIcon,
+    ResourceDefinition,
+    ResourceEntry,
+    ResourceGainBatch,
+} from '../Models/FarmResources.model';
 
 const RESOURCE_DEFINITIONS: readonly ResourceDefinition[] = [
     { id: PlantId.corn, iconPath: 'assets/images/corn.png' },

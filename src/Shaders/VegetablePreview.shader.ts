@@ -1,12 +1,5 @@
 import * as THREE from 'three';
-
-export interface VegetablePreviewUniforms {
-    readonly time: { value: number };
-    readonly active: { value: number };
-    readonly minOpacity: { value: number };
-    readonly maxOpacity: { value: number };
-    readonly pulseSpeed: { value: number };
-}
+import type { VegetablePreviewUniforms } from '../Models/VegetablePreview.model';
 
 const VEGETABLE_PREVIEW_SHADER_KEY = 'vegetable-preview-opacity-v1';
 

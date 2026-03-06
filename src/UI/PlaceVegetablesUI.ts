@@ -68,6 +68,7 @@ export class PlaceVegetablesUI {
     private readonly planButtonTexture: THREE.CanvasTexture;
     private readonly planButtonMesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
     private readonly buttons: PlantButton[] = [];
+    private readonly buttonHitMeshes: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>[] = [];
     private readonly defaultButtonColor = new THREE.Color(BUTTON_BASE_COLOR);
     private readonly activeButtonColor = new THREE.Color(BUTTON_ACTIVE_COLOR);
     private readonly visibilityAnimation = new UIVisibilityAnimationController(
@@ -310,6 +311,7 @@ export class PlaceVegetablesUI {
 
             button.iconTexture?.dispose();
         }
+        this.buttonHitMeshes.length = 0;
     }
 
     private createPlantButtons() {
@@ -380,6 +382,7 @@ export class PlaceVegetablesUI {
                 popElapsed: SELECTION_POP_DURATION,
                 popDuration: 0,
             });
+            this.buttonHitMeshes.push(hitMesh);
         }
     }
 
@@ -578,7 +581,7 @@ export class PlaceVegetablesUI {
         this.raycaster.setFromCamera(this.normalizedPointer, this.overlayCamera);
 
         const intersections = this.raycaster.intersectObjects(
-            this.buttons.map((button) => button.hitMesh),
+            this.buttonHitMeshes,
             false,
         );
 

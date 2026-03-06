@@ -1,4 +1,10 @@
-const AUDIO_CLIP_CONFIG = {
+import type {
+    AudioClipConfig,
+    AudioClipId,
+    AudioPoolState,
+} from '../Models/Audio.model';
+
+const AUDIO_CLIP_CONFIG: Record<AudioClipId, AudioClipConfig> = {
     click: {
         path: 'assets/sounds/click_003.mp3',
         poolSize: 4,
@@ -10,14 +16,6 @@ const AUDIO_CLIP_CONFIG = {
         volume: 1,
     },
 } as const;
-
-export type AudioClipId = keyof typeof AUDIO_CLIP_CONFIG;
-
-interface AudioPoolState {
-    readonly clipId: AudioClipId;
-    readonly instances: HTMLAudioElement[];
-    nextIndex: number;
-}
 
 export class AudioManager {
     private readonly pools = new Map<AudioClipId, AudioPoolState>();

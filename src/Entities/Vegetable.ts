@@ -1,6 +1,11 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import type { PlantId } from '../Models/PlaceVegetable.model';
+import type {
+    VegetableGrowthLevel,
+    VegetableOptions,
+    Vector3Like,
+} from '../Models/Vegetable.model';
+import { VEGETABLE_GROWTH_LEVELS } from '../Models/Vegetable.model';
 import { applyVegetablePreviewShader } from '../Shaders/VegetablePreview.shader';
 
 const DEFAULT_POSITION = new THREE.Vector3(0.536, 0.087, 1.741);
@@ -29,29 +34,8 @@ const WIND_SWAY_POSITION_Y = 0.004;
 const WIND_SWAY_FREQ_A = 1.6;
 const WIND_SWAY_FREQ_B = 2.35;
 
-const GROWTH_LEVELS = [1, 2, 3] as const;
-export type VegetableGrowthLevel = (typeof GROWTH_LEVELS)[number];
-
-interface Vector3Like {
-    readonly x: number;
-    readonly y: number;
-    readonly z: number;
-}
-
-export interface VegetableOptions {
-    readonly plantId: PlantId;
-    readonly modelPathsByLevel: Record<VegetableGrowthLevel, string>;
-    readonly maxTextureAnisotropy: number;
-    readonly position?: Vector3Like;
-    readonly rotationDegrees?: Vector3Like;
-    readonly scale?: number;
-    readonly slotOffsets?: readonly Vector3Like[];
-    readonly initialGrowthLevel?: VegetableGrowthLevel;
-    readonly isVisibleInitially?: boolean;
-}
-
 export class Vegetable extends THREE.Group {
-    readonly plantId: PlantId;
+    readonly plantId: VegetableOptions['plantId'];
 
     private readonly loader = new GLTFLoader();
     private readonly modelPathsByLevel: Record<VegetableGrowthLevel, string>;
@@ -109,7 +93,7 @@ export class Vegetable extends THREE.Group {
 
         this.isLoading = true;
         this.loadPromise = Promise.all(
-            GROWTH_LEVELS.map(async (level) => ({
+            VEGETABLE_GROWTH_LEVELS.map(async (level) => ({
                 level,
                 model: await this.loadModel(this.modelPathsByLevel[level]),
             })),

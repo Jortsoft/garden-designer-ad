@@ -1,16 +1,17 @@
 import * as THREE from 'three';
 import { PlaceHolder } from '../Entities/PlaceHolder';
+import type { ScreenPointBlocker } from '../Models/Input.model';
+import type { GameState } from '../Systems/GameState';
 import { audioManager } from './AudioManager';
 
 const CLICK_MOVE_THRESHOLD = 6;
-
-type ScreenPointBlocker = (screenX: number, screenY: number) => boolean;
 
 export class PlaceHolderActivationManager {
     private readonly camera: THREE.PerspectiveCamera;
     private readonly placeHolder: PlaceHolder;
     private readonly inputElement: HTMLElement;
     private readonly shouldBlockInput: ScreenPointBlocker;
+    private readonly gameState: GameState | null;
     private readonly onActivate: () => void;
     private readonly raycaster = new THREE.Raycaster();
     private readonly pointerDownPosition = new THREE.Vector2();
@@ -26,12 +27,14 @@ export class PlaceHolderActivationManager {
         inputElement: HTMLElement,
         onActivate: () => void,
         shouldBlockInput: ScreenPointBlocker = () => false,
+        gameState: GameState | null = null,
     ) {
         this.camera = camera;
         this.placeHolder = placeHolder;
         this.inputElement = inputElement;
         this.onActivate = onActivate;
         this.shouldBlockInput = shouldBlockInput;
+        this.gameState = gameState;
     }
 
     initialize() {
@@ -56,7 +59,7 @@ export class PlaceHolderActivationManager {
             return;
         }
 
-        if (this.shouldBlockInput(event.clientX, event.clientY)) {
+        if (this.isActivationBlocked(event.clientX, event.clientY)) {
             return;
         }
 
@@ -110,7 +113,7 @@ export class PlaceHolderActivationManager {
 
         const canActivate =
             !this.hasPointerMoved &&
-            !this.shouldBlockInput(event.clientX, event.clientY);
+            !this.isActivationBlocked(event.clientX, event.clientY);
 
         this.resetPointerState();
 
@@ -135,6 +138,18 @@ export class PlaceHolderActivationManager {
         this.activePointerId = null;
         this.activePointerType = null;
         this.hasPointerMoved = false;
+    }
+
+    private isActivationBlocked(screenX: number, screenY: number) {
+        if (this.shouldBlockInput(screenX, screenY)) {
+            return true;
+        }
+
+        if (this.gameState && !this.gameState.canActivatePlaceholder()) {
+            return true;
+        }
+
+        return false;
     }
 
     private tryActivateFromScreenPoint(screenX: number, screenY: number) {
