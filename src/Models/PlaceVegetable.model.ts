@@ -1,4 +1,4 @@
-import type * as THREE from 'three';
+import type { Graphics, Sprite, Text } from 'pixi.js';
 
 export const PlantId = {
     corn: 'corn',
@@ -20,34 +20,19 @@ export interface PlantOptionDefinition {
     readonly texturePath: string;
 }
 
-export interface PlantButton {
+export interface PlaceVegetableButtonState {
     readonly id: PlantId;
-    readonly hitMesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-    readonly iconMesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-    readonly selectionMesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-    iconTexture: THREE.Texture | null;
-    baseButtonSize: number;
-    baseIconSize: number;
-    baseX: number;
-    baseY: number;
+    readonly container: Graphics;
+    readonly icon: Sprite;
+    readonly selection: Graphics;
+    readonly hitArea: { x: number; y: number; width: number; height: number };
     selectionBlend: number;
     pulseTime: number;
-    popElapsed: number;
-    popDuration: number;
 }
 
-export interface SelectionVisualOptions {
-    snapToSelection?: boolean;
-    triggerPop?: boolean;
-}
-
-export interface RoundedFrameTextureOptions {
-    fillColor: string;
-    fillBottomColor?: string;
-    borderColor: string;
-    borderWidth: number;
-    gloss: boolean;
-    feather?: number;
-    innerStrokeColor?: string;
-    outerShadowColor?: string;
+export interface PlanButtonState {
+    readonly container: Graphics;
+    readonly label: Text;
+    readonly hitArea: { x: number; y: number; width: number; height: number };
+    pulseTime: number;
 }

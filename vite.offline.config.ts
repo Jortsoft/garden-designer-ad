@@ -1,5 +1,8 @@
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
+
+const currentDir = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   build: {
@@ -9,7 +12,7 @@ export default defineConfig({
     assetsInlineLimit: 0,
     cssCodeSplit: false,
     lib: {
-      entry: path.resolve(__dirname, 'src/main.ts'),
+      entry: path.resolve(currentDir, 'src/main.ts'),
       name: 'GardenDesignerAd',
       formats: ['iife'],
       fileName: () => 'app',

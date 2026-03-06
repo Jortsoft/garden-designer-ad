@@ -1,18 +1,20 @@
-import * as THREE from 'three';
 import {
-    SHARED_UI_VISIBILITY_ANIMATION,
-    UIVisibilityAnimationController,
-    type UIVisibilityAnimationFrame,
-} from '../Animations/AnimationUI';
-import { PlantId, isPlantId } from '../Models/PlaceVegetable.model';
-import type {
-    PlantButton,
-    PlantOptionDefinition,
-    RoundedFrameTextureOptions,
-    SelectionVisualOptions,
-} from '../Models/PlaceVegetable.model';
+    Assets,
+    Container,
+    Graphics,
+    Sprite,
+    Text,
+    Texture,
+} from 'pixi.js';
 import { audioManager } from '../Managers/AudioManager';
-import { OverlayContainerUI } from './OverlayContainerUI';
+import {
+    isPlantId,
+    PlantId,
+    type PlaceVegetableButtonState,
+    type PlantOptionDefinition,
+    type PlanButtonState,
+} from '../Models/PlaceVegetable.model';
+import { PixiUI } from '../Systems/PixiUI';
 
 const PLANT_OPTIONS: readonly PlantOptionDefinition[] = [
     { id: PlantId.corn, texturePath: 'assets/images/corn.png' },
@@ -26,132 +28,100 @@ const PANEL_MAX_HEIGHT = 204;
 const PANEL_MIN_HEIGHT = 130;
 const PANEL_MARGIN_BOTTOM = 12;
 const PANEL_MARGIN_BOTTOM_MAX = 24;
-const BUTTON_BASE_COLOR = '#f1d7b3';
-const BUTTON_SELECTION_COLOR = '#ffdca0';
-const BUTTON_ACTIVE_COLOR = '#e6bc86';
-const SELECTION_BLEND_SPEED = 11;
-const SELECTION_POP_DURATION = 0.26;
-const SELECTION_PULSE_SPEED = 7.2;
-const BUTTON_FRAME_TEXTURE_SIZE = 320;
-const PLAN_BUTTON_TEXTURE_WIDTH = 480;
-const PLAN_BUTTON_TEXTURE_HEIGHT = 220;
 const PLAN_BUTTON_MIN_WIDTH = 154;
 const PLAN_BUTTON_MAX_WIDTH = 212;
 const PLAN_BUTTON_MIN_HEIGHT = 56;
 const PLAN_BUTTON_MAX_HEIGHT = 74;
-const PLAN_BUTTON_OPACITY = 0.96;
+const VISIBILITY_HIDDEN_OFFSET_Y = -56;
+const VISIBILITY_HIDDEN_SCALE = 0.94;
+const ENTER_DURATION = 0.34;
+const EXIT_DURATION = 0.24;
+const INTERACTIVE_THRESHOLD = 0.9;
+const SELECTION_BLEND_SPEED = 11;
+const SELECTION_PULSE_SPEED = 7.2;
 const PLAN_BUTTON_PULSE_SPEED = 3.8;
 const PLAN_BUTTON_PULSE_AMOUNT = 0.03;
-const PLAN_BUTTON_RENDER_ORDER = 1115;
-const OVERLAY_CONTAINER_OPTIONS = {
-    title: 'Choose plant',
-    theme: {
-        backgroundColor: 'rgba(181, 152, 117, 0.94)',
-        borderColor: 'rgba(226, 187, 137, 0.9)',
-        titleColor: '#ffffff',
-        titleStrokeColor: 'rgba(13, 19, 23, 0.92)',
-        titleShadowColor: 'rgba(0, 65, 120, 0.34)',
-    },
-} as const;
+
+interface Bounds2D {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+}
 
 export class PlaceVegetablesUI {
     private readonly inputElement: HTMLElement;
-    private readonly renderer: THREE.WebGLRenderer;
-    private readonly textureLoader = new THREE.TextureLoader();
-    private readonly raycaster = new THREE.Raycaster();
-    private readonly normalizedPointer = new THREE.Vector2();
-    private readonly overlayScene = new THREE.Scene();
-    private readonly overlayCamera = new THREE.OrthographicCamera(0, 1, 0, 1, 0, 10);
-    private readonly overlayContainer: OverlayContainerUI;
-    private readonly buttonFrameTexture: THREE.CanvasTexture;
-    private readonly selectionFrameTexture: THREE.CanvasTexture;
-    private readonly planButtonTexture: THREE.CanvasTexture;
-    private readonly planButtonMesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-    private readonly buttons: PlantButton[] = [];
-    private readonly buttonHitMeshes: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>[] = [];
-    private readonly defaultButtonColor = new THREE.Color(BUTTON_BASE_COLOR);
-    private readonly activeButtonColor = new THREE.Color(BUTTON_ACTIVE_COLOR);
-    private readonly visibilityAnimation = new UIVisibilityAnimationController(
-        SHARED_UI_VISIBILITY_ANIMATION,
-    );
+    private readonly pixiUI: PixiUI;
+    private readonly root = new Container();
+    private readonly panel = new Graphics();
+    private readonly titleLabel = new Text({
+        text: 'Choose plant',
+        style: {
+            fontFamily: 'Trebuchet MS, Verdana, sans-serif',
+            fontSize: 30,
+            fill: '#ffffff',
+            fontWeight: '700',
+            stroke: { color: '#0d1317', width: 4 },
+        },
+    });
+    private readonly buttonsRoot = new Container();
+    private readonly planButton: PlanButtonState = {
+        container: new Graphics(),
+        label: new Text({
+            text: 'Plant',
+            style: {
+                fontFamily: 'Trebuchet MS, Verdana, sans-serif',
+                fontSize: 38,
+                fill: '#fffaf1',
+                fontWeight: '700',
+                stroke: { color: '#7a4110', width: 4 },
+            },
+        }),
+        hitArea: { x: 0, y: 0, width: 0, height: 0 },
+        pulseTime: 0,
+    };
+    private readonly buttons: PlaceVegetableButtonState[] = [];
+    private readonly loadedTextures = new Map<PlantId, Texture>();
 
     private selectedPlantId: PlantId = PlantId.corn;
-    private visibilityFrame: UIVisibilityAnimationFrame = this.visibilityAnimation.getFrame();
     private viewportWidth = 1;
     private viewportHeight = 1;
-    private panelScreenX = 0;
-    private panelScreenY = 0;
-    private panelScreenWidth = 0;
-    private panelScreenHeight = 0;
-    private planButtonScreenX = 0;
-    private planButtonScreenY = 0;
-    private planButtonScreenWidth = 0;
-    private planButtonScreenHeight = 0;
+    private visibility = 0;
+    private visibilityTarget = 0;
     private panelWidth = 1;
     private panelHeight = 1;
     private panelCenterY = 0;
     private planButtonWidth = 1;
     private planButtonHeight = 1;
     private planButtonCenterY = 0;
-    private planButtonPulseTime = 0;
+    private panelBounds: Bounds2D = { x: 0, y: 0, width: 0, height: 0 };
+    private planBounds: Bounds2D = { x: 0, y: 0, width: 0, height: 0 };
     private isInitialized = false;
     private isDisposed = false;
     private loadPromise: Promise<void> | null = null;
     private onPlantSelected: ((plantId: PlantId) => void) | null = null;
     private onPlanRequested: (() => void) | null = null;
 
-    constructor(inputElement: HTMLElement, renderer: THREE.WebGLRenderer) {
+    constructor(inputElement: HTMLElement, pixiUI: PixiUI) {
         this.inputElement = inputElement;
-        this.renderer = renderer;
-        this.overlayCamera.position.z = 1;
-        this.visibilityAnimation.hide(true);
-        this.visibilityFrame = this.visibilityAnimation.getFrame();
-        this.overlayContainer = new OverlayContainerUI(
-            this.overlayScene,
-            OVERLAY_CONTAINER_OPTIONS,
-        );
-
-        this.buttonFrameTexture = this.createRoundedFrameTexture({
-            fillColor: 'rgba(245, 218, 180, 1)',
-            fillBottomColor: 'rgba(225, 184, 132, 1)',
-            borderColor: 'rgba(196, 141, 84, 0.98)',
-            innerStrokeColor: 'rgba(255, 241, 216, 0.78)',
-            outerShadowColor: 'rgba(91, 58, 21, 0.28)',
-            borderWidth: 16,
-            gloss: true,
-        });
-        this.selectionFrameTexture = this.createRoundedFrameTexture({
-            fillColor: 'rgba(255, 224, 148, 1)',
-            fillBottomColor: 'rgba(237, 177, 95, 1)',
-            borderColor: 'rgba(255, 252, 239, 1)',
-            innerStrokeColor: 'rgba(255, 255, 255, 0.98)',
-            outerShadowColor: 'rgba(255, 165, 57, 0.42)',
-            borderWidth: 18,
-            gloss: true,
-            feather: 0.11,
-        });
-        this.planButtonTexture = this.createPlanButtonTexture();
-
-        const planButtonMaterial = new THREE.MeshBasicMaterial({
-            map: this.planButtonTexture,
-            transparent: true,
-            opacity: PLAN_BUTTON_OPACITY,
-            depthTest: false,
-            depthWrite: false,
-        });
-        planButtonMaterial.toneMapped = false;
-        this.planButtonMesh = new THREE.Mesh(
-            new THREE.PlaneGeometry(1, 1),
-            planButtonMaterial,
-        );
-        this.planButtonMesh.userData.uiAction = 'plant';
-        this.planButtonMesh.renderOrder = PLAN_BUTTON_RENDER_ORDER;
-        this.planButtonMesh.position.z = 0.2;
-        this.overlayScene.add(this.planButtonMesh);
-
-        this.createPlantButtons();
-        this.applySelectionVisuals({ snapToSelection: true });
-        this.updateViewport(1, 1);
+        this.pixiUI = pixiUI;
+        this.root.visible = false;
+        this.root.eventMode = 'none';
+        this.root.zIndex = 30;
+        this.root.sortableChildren = true;
+        this.panel.zIndex = 0;
+        this.titleLabel.anchor.set(0.5, 0.5);
+        this.titleLabel.zIndex = 1;
+        this.buttonsRoot.zIndex = 2;
+        this.planButton.container.zIndex = 3;
+        this.planButton.label.anchor.set(0.5, 0.5);
+        this.planButton.label.zIndex = 4;
+        this.root.addChild(this.panel);
+        this.root.addChild(this.titleLabel);
+        this.root.addChild(this.buttonsRoot);
+        this.root.addChild(this.planButton.container);
+        this.root.addChild(this.planButton.label);
+        this.createButtons();
     }
 
     initialize() {
@@ -164,28 +134,19 @@ export class PlaceVegetablesUI {
         }
 
         this.isInitialized = true;
+        this.pixiUI.root.addChild(this.root);
         this.inputElement.addEventListener('pointerdown', this.handlePointerDown);
         this.updateViewport(
             this.inputElement.clientWidth || window.innerWidth,
             this.inputElement.clientHeight || window.innerHeight,
         );
-        this.loadPromise = this.loadPlantTextures();
-        this.refreshVisibilityState(0);
+        this.loadPromise = this.loadTextures();
 
         return this.loadPromise;
     }
 
     render() {
-        if (!this.isInitialized || this.isDisposed || !this.visibilityFrame.isRenderable) {
-            return;
-        }
-
-        const previousAutoClear = this.renderer.autoClear;
-
-        this.renderer.autoClear = false;
-        this.renderer.clearDepth();
-        this.renderer.render(this.overlayScene, this.overlayCamera);
-        this.renderer.autoClear = previousAutoClear;
+        // Rendered by shared PixiUI.
     }
 
     update(deltaSeconds: number) {
@@ -193,12 +154,13 @@ export class PlaceVegetablesUI {
             return;
         }
 
-        this.refreshVisibilityState(deltaSeconds);
-
-        if (!this.visibilityFrame.isRenderable) {
+        this.updateVisibility(deltaSeconds);
+        if (this.visibility <= Number.EPSILON) {
+            this.root.visible = false;
             return;
         }
 
+        this.root.visible = true;
         this.animateButtons(deltaSeconds);
         this.animatePlanButton(deltaSeconds);
     }
@@ -206,39 +168,18 @@ export class PlaceVegetablesUI {
     updateViewport(width: number, height: number) {
         this.viewportWidth = Math.max(width, 1);
         this.viewportHeight = Math.max(height, 1);
-
-        this.overlayCamera.left = -this.viewportWidth * 0.5;
-        this.overlayCamera.right = this.viewportWidth * 0.5;
-        this.overlayCamera.top = this.viewportHeight * 0.5;
-        this.overlayCamera.bottom = -this.viewportHeight * 0.5;
-        this.overlayCamera.updateProjectionMatrix();
-
-        this.layoutOverlay();
+        this.layout();
     }
 
     isScreenPointBlocked(screenX: number, screenY: number) {
-        if (
-            !this.isInitialized ||
-            this.isDisposed ||
-            !this.visibilityFrame.isInteractive
-        ) {
+        if (!this.isInteractive()) {
             return false;
         }
 
-        const isInsidePanel = (
-            screenX >= this.panelScreenX &&
-            screenX <= this.panelScreenX + this.panelScreenWidth &&
-            screenY >= this.panelScreenY &&
-            screenY <= this.panelScreenY + this.panelScreenHeight
+        return (
+            this.isPointInsideBounds(screenX, screenY, this.panelBounds) ||
+            this.isPointInsideBounds(screenX, screenY, this.planBounds)
         );
-        const isInsidePlanButton = (
-            screenX >= this.planButtonScreenX &&
-            screenX <= this.planButtonScreenX + this.planButtonScreenWidth &&
-            screenY >= this.planButtonScreenY &&
-            screenY <= this.planButtonScreenY + this.planButtonScreenHeight
-        );
-
-        return isInsidePanel || isInsidePlanButton;
     }
 
     getSelectedPlantId() {
@@ -259,13 +200,11 @@ export class PlaceVegetablesUI {
         }
 
         this.selectedPlantId = PlantId.corn;
-        this.applySelectionVisuals({ snapToSelection: true });
+        this.visibilityTarget = 1;
+        this.visibility = 0;
+        this.planButton.pulseTime = 0;
         this.onPlantSelected?.(PlantId.corn);
-        this.planButtonPulseTime = 0;
-        this.visibilityAnimation.show();
-        this.refreshVisibilityState(0);
-        this.animateButtons(0);
-        this.animatePlanButton(0);
+        this.layout();
     }
 
     hide() {
@@ -273,9 +212,7 @@ export class PlaceVegetablesUI {
             return;
         }
 
-        this.visibilityAnimation.hide();
-        this.refreshVisibilityState(0);
-        this.animateButtons(0);
+        this.visibilityTarget = 0;
     }
 
     dispose() {
@@ -287,126 +224,48 @@ export class PlaceVegetablesUI {
         this.onPlantSelected = null;
         this.onPlanRequested = null;
         this.inputElement.removeEventListener('pointerdown', this.handlePointerDown);
-
-        this.overlayContainer.dispose();
-        this.buttonFrameTexture.dispose();
-        this.selectionFrameTexture.dispose();
-        this.planButtonTexture.dispose();
-        this.planButtonMesh.geometry.dispose();
-        this.planButtonMesh.material.dispose();
-        this.overlayScene.remove(this.planButtonMesh);
-
-        for (const button of this.buttons) {
-            button.hitMesh.geometry.dispose();
-            button.hitMesh.material.dispose();
-            this.overlayScene.remove(button.hitMesh);
-
-            button.iconMesh.geometry.dispose();
-            button.iconMesh.material.dispose();
-            this.overlayScene.remove(button.iconMesh);
-
-            button.selectionMesh.geometry.dispose();
-            button.selectionMesh.material.dispose();
-            this.overlayScene.remove(button.selectionMesh);
-
-            button.iconTexture?.dispose();
+        this.pixiUI.root.removeChild(this.root);
+        for (const texture of this.loadedTextures.values()) {
+            texture.destroy(true);
         }
-        this.buttonHitMeshes.length = 0;
+        this.loadedTextures.clear();
+        this.root.destroy({ children: true });
     }
 
-    private createPlantButtons() {
+    private createButtons() {
         for (const option of PLANT_OPTIONS) {
-            const selectionMaterial = new THREE.MeshBasicMaterial({
-                color: BUTTON_SELECTION_COLOR,
-                map: this.selectionFrameTexture,
-                transparent: true,
-                opacity: 0.42,
-                depthTest: false,
-                depthWrite: false,
-            });
-            selectionMaterial.toneMapped = false;
-
-            const selectionMesh = new THREE.Mesh(
-                new THREE.PlaneGeometry(1, 1),
-                selectionMaterial,
-            );
-            selectionMesh.renderOrder = 1110;
-            this.overlayScene.add(selectionMesh);
-
-            const hitMaterial = new THREE.MeshBasicMaterial({
-                color: BUTTON_BASE_COLOR,
-                map: this.buttonFrameTexture,
-                transparent: true,
-                opacity: 0.92,
-                depthTest: false,
-                depthWrite: false,
-            });
-            hitMaterial.toneMapped = false;
-
-            const hitMesh = new THREE.Mesh(
-                new THREE.PlaneGeometry(1, 1),
-                hitMaterial,
-            );
-            hitMesh.userData.plantId = option.id;
-            hitMesh.renderOrder = 1111;
-            this.overlayScene.add(hitMesh);
-
-            const iconMaterial = new THREE.MeshBasicMaterial({
-                color: '#ffffff',
-                transparent: true,
-                opacity: 1,
-                depthTest: false,
-                depthWrite: false,
-            });
-            iconMaterial.toneMapped = false;
-
-            const iconMesh = new THREE.Mesh(
-                new THREE.PlaneGeometry(1, 1),
-                iconMaterial,
-            );
-            iconMesh.renderOrder = 1112;
-            this.overlayScene.add(iconMesh);
-
+            const selection = new Graphics();
+            const container = new Graphics();
+            const icon = new Sprite(Texture.WHITE);
+            icon.anchor.set(0.5, 0.5);
+            selection.zIndex = 0;
+            container.zIndex = 1;
+            icon.zIndex = 2;
+            this.buttonsRoot.addChild(selection);
+            this.buttonsRoot.addChild(container);
+            this.buttonsRoot.addChild(icon);
             this.buttons.push({
                 id: option.id,
-                hitMesh,
-                iconMesh,
-                selectionMesh,
-                iconTexture: null,
-                baseButtonSize: 1,
-                baseIconSize: 1,
-                baseX: 0,
-                baseY: 0,
+                container,
+                icon,
+                selection,
+                hitArea: { x: 0, y: 0, width: 0, height: 0 },
                 selectionBlend: option.id === this.selectedPlantId ? 1 : 0,
                 pulseTime: 0,
-                popElapsed: SELECTION_POP_DURATION,
-                popDuration: 0,
             });
-            this.buttonHitMeshes.push(hitMesh);
         }
     }
 
-    private async loadPlantTextures() {
+    private async loadTextures() {
         await Promise.all(
             PLANT_OPTIONS.map(async (option) => {
-                const button = this.buttons.find((entry) => entry.id === option.id);
-
-                if (!button) {
-                    return;
-                }
-
                 try {
-                    const texture = await this.textureLoader.loadAsync(option.texturePath);
-
-                    texture.colorSpace = THREE.SRGBColorSpace;
-                    texture.minFilter = THREE.LinearMipmapLinearFilter;
-                    texture.magFilter = THREE.LinearFilter;
-                    texture.generateMipmaps = true;
-                    texture.needsUpdate = true;
-
-                    button.iconTexture = texture;
-                    button.iconMesh.material.map = texture;
-                    button.iconMesh.material.needsUpdate = true;
+                    const texture = await Assets.load<Texture>(option.texturePath);
+                    this.loadedTextures.set(option.id, texture);
+                    const button = this.buttons.find((entry) => entry.id === option.id);
+                    if (button) {
+                        button.icon.texture = texture;
+                    }
                 } catch (error) {
                     console.error(`Failed to load plant icon: ${option.texturePath}`, error);
                 }
@@ -414,28 +273,47 @@ export class PlaceVegetablesUI {
         );
     }
 
-    private layoutOverlay() {
-        const panelWidth = THREE.MathUtils.clamp(
-            this.viewportWidth * 0.92,
-            PANEL_MIN_WIDTH,
-            PANEL_MAX_WIDTH,
-        );
-        const panelHeight = THREE.MathUtils.clamp(
-            this.viewportHeight * 0.26,
-            PANEL_MIN_HEIGHT,
-            PANEL_MAX_HEIGHT,
-        );
-        const marginBottom = THREE.MathUtils.clamp(
+    private layout() {
+        const panelWidth = this.clamp(this.viewportWidth * 0.92, PANEL_MIN_WIDTH, PANEL_MAX_WIDTH);
+        const panelHeight = this.clamp(this.viewportHeight * 0.26, PANEL_MIN_HEIGHT, PANEL_MAX_HEIGHT);
+        const marginBottom = this.clamp(
             this.viewportHeight * 0.02,
             PANEL_MARGIN_BOTTOM,
             PANEL_MARGIN_BOTTOM_MAX,
         );
-        const panelCenterY = -this.viewportHeight * 0.5 + marginBottom + panelHeight * 0.5;
+        const panelCenterX = this.viewportWidth * 0.5;
+        const panelCenterY = this.viewportHeight - marginBottom - panelHeight * 0.5;
+        const planButtonWidth = this.clamp(
+            panelWidth * 0.32,
+            PLAN_BUTTON_MIN_WIDTH,
+            PLAN_BUTTON_MAX_WIDTH,
+        );
+        const planButtonHeight = this.clamp(
+            panelHeight * 0.42,
+            PLAN_BUTTON_MIN_HEIGHT,
+            PLAN_BUTTON_MAX_HEIGHT,
+        );
+        const planButtonCenterY = panelCenterY - panelHeight * 0.86;
 
         this.panelWidth = panelWidth;
         this.panelHeight = panelHeight;
         this.panelCenterY = panelCenterY;
-        this.overlayContainer.layout(panelWidth, panelHeight, 0, panelCenterY);
+        this.planButtonWidth = planButtonWidth;
+        this.planButtonHeight = planButtonHeight;
+        this.planButtonCenterY = planButtonCenterY;
+
+        this.panel.clear();
+        this.panel.roundRect(
+            panelCenterX - panelWidth * 0.5,
+            panelCenterY - panelHeight * 0.5,
+            panelWidth,
+            panelHeight,
+            Math.max(20, panelHeight * 0.22),
+        );
+        this.panel.fill({ color: 0xb59875, alpha: 0.94 });
+        this.panel.stroke({ color: 0xe2bb89, alpha: 0.9, width: 4 });
+
+        this.titleLabel.position.set(panelCenterX, panelCenterY - panelHeight * 0.34);
 
         const horizontalPadding = panelWidth * 0.1;
         const buttonsAreaWidth = panelWidth - horizontalPadding * 2;
@@ -446,94 +324,180 @@ export class PlaceVegetablesUI {
             126,
         );
         const totalButtonsWidth = buttonSize * 3 + buttonSpacing * 2;
-        const startButtonX = -totalButtonsWidth * 0.5 + buttonSize * 0.5;
-        const buttonY = panelCenterY - panelHeight * 0.12;
-        const planButtonWidth = THREE.MathUtils.clamp(
-            panelWidth * 0.32,
-            PLAN_BUTTON_MIN_WIDTH,
-            PLAN_BUTTON_MAX_WIDTH,
-        );
-        const planButtonHeight = THREE.MathUtils.clamp(
-            panelHeight * 0.42,
-            PLAN_BUTTON_MIN_HEIGHT,
-            PLAN_BUTTON_MAX_HEIGHT,
-        );
-        const planButtonCenterY = panelCenterY + panelHeight * 0.86;
+        const startButtonX = panelCenterX - totalButtonsWidth * 0.5 + buttonSize * 0.5;
+        const buttonY = panelCenterY + panelHeight * 0.12;
 
         for (let index = 0; index < this.buttons.length; index += 1) {
             const button = this.buttons[index];
             const buttonX = startButtonX + index * (buttonSize + buttonSpacing);
-            const iconSize = buttonSize * 0.68;
-
-            button.baseButtonSize = buttonSize;
-            button.baseIconSize = iconSize;
-            button.baseX = buttonX;
-            button.baseY = buttonY;
+            button.hitArea.x = buttonX - buttonSize * 0.5;
+            button.hitArea.y = buttonY - buttonSize * 0.5;
+            button.hitArea.width = buttonSize;
+            button.hitArea.height = buttonSize;
+            button.icon.position.set(buttonX, buttonY);
+            button.icon.width = buttonSize * 0.68;
+            button.icon.height = buttonSize * 0.68;
         }
 
-        this.planButtonWidth = planButtonWidth;
-        this.planButtonHeight = planButtonHeight;
-        this.planButtonCenterY = planButtonCenterY;
+        this.planButton.hitArea.x = panelCenterX - planButtonWidth * 0.5;
+        this.planButton.hitArea.y = planButtonCenterY - planButtonHeight * 0.5;
+        this.planButton.hitArea.width = planButtonWidth;
+        this.planButton.hitArea.height = planButtonHeight;
 
-        this.refreshVisibilityState(0);
-        this.animateButtons(0);
-        this.animatePlanButton(0);
+        this.updateVisibilityTransform();
     }
 
-    private applySelectionVisuals(options?: SelectionVisualOptions) {
-        const shouldSnapToSelection = options?.snapToSelection ?? false;
-        const shouldTriggerPop = options?.triggerPop ?? false;
+    private updateVisibility(deltaSeconds: number) {
+        const duration = this.visibilityTarget > this.visibility ? ENTER_DURATION : EXIT_DURATION;
+        if (duration <= Number.EPSILON || deltaSeconds <= 0) {
+            this.visibility = this.visibilityTarget;
+            this.updateVisibilityTransform();
+            return;
+        }
 
+        const direction = this.visibilityTarget > this.visibility ? 1 : -1;
+        this.visibility = this.clamp(
+            this.visibility + (deltaSeconds / duration) * direction,
+            0,
+            1,
+        );
+        this.updateVisibilityTransform();
+    }
+
+    private updateVisibilityTransform() {
+        const eased = this.easeOutCubic(this.visibility);
+        const scale = this.lerp(VISIBILITY_HIDDEN_SCALE, 1, eased);
+        const offsetY = VISIBILITY_HIDDEN_OFFSET_Y * (1 - eased);
+        const alpha = eased;
+        const panelCenterX = this.viewportWidth * 0.5;
+        const planCenterX = this.viewportWidth * 0.5;
+        const panelCenterY = this.panelCenterY + offsetY;
+        const planCenterY = this.planButtonCenterY + offsetY;
+
+        this.root.alpha = alpha;
+        // Keep button graphics in local (0,0) space. Button animation/layout is handled
+        // in animateButtons(), so mutating child transform here causes positional drift.
+        for (const child of this.buttonsRoot.children) {
+            child.position.set(0, 0);
+            child.scale.set(1);
+        }
+
+        this.panel.scale.set(scale);
+        this.panel.position.set(
+            panelCenterX + (this.viewportWidth * 0.5 - panelCenterX) * (1 - scale),
+            panelCenterY - this.panelCenterY * scale + this.panelCenterY,
+        );
+        this.titleLabel.scale.set(scale);
+        this.titleLabel.position.y = this.panelCenterY - this.panelHeight * 0.34 * scale + offsetY;
+        this.titleLabel.position.x = panelCenterX;
+
+        this.planButton.container.position.set(0, 0);
+        this.planButton.container.scale.set(1);
+        this.planButton.label.scale.set(1);
+        this.planButton.label.position.set(planCenterX, planCenterY);
+
+        const panelWidth = this.panelWidth * scale;
+        const panelHeight = this.panelHeight * scale;
+        this.panelBounds.x = panelCenterX - panelWidth * 0.5;
+        this.panelBounds.y = panelCenterY - panelHeight * 0.5;
+        this.panelBounds.width = panelWidth;
+        this.panelBounds.height = panelHeight;
+        const planWidth = this.planButtonWidth * scale;
+        const planHeight = this.planButtonHeight * scale;
+        this.planBounds.x = planCenterX - planWidth * 0.5;
+        this.planBounds.y = planCenterY - planHeight * 0.5;
+        this.planBounds.width = planWidth;
+        this.planBounds.height = planHeight;
+    }
+
+    private animateButtons(deltaSeconds: number) {
+        const uiScale = this.getUIScale();
+        const uiAlpha = this.visibility;
         for (const button of this.buttons) {
             const isSelected = button.id === this.selectedPlantId;
             const targetBlend = isSelected ? 1 : 0;
-
-            if (shouldSnapToSelection) {
-                button.selectionBlend = targetBlend;
-            }
-
-            if (shouldTriggerPop && isSelected) {
-                button.popElapsed = 0;
-                button.popDuration = SELECTION_POP_DURATION;
-            }
-
-            if (!isSelected) {
+            const blendFactor = deltaSeconds > 0
+                ? 1 - Math.exp(-SELECTION_BLEND_SPEED * deltaSeconds)
+                : 1;
+            button.selectionBlend = this.lerp(button.selectionBlend, targetBlend, blendFactor);
+            if (isSelected) {
+                button.pulseTime += Math.max(0, deltaSeconds);
+            } else {
                 button.pulseTime = 0;
+            }
+
+            const pulse = isSelected
+                ? Math.sin(button.pulseTime * SELECTION_PULSE_SPEED) * 0.016
+                : 0;
+            const scale = 1 + button.selectionBlend * 0.09 + pulse;
+            const bgColor = this.mixColor(0xf1d7b3, 0xe6bc86, button.selectionBlend);
+            const selectionAlpha = (0.08 + button.selectionBlend * 0.46) * uiAlpha;
+            const width = button.hitArea.width * scale * uiScale;
+            const height = button.hitArea.height * scale * uiScale;
+            const x = this.viewportWidth * 0.5 + (button.hitArea.x + button.hitArea.width * 0.5 - this.viewportWidth * 0.5) * uiScale;
+            const y = this.panelCenterY + (button.hitArea.y + button.hitArea.height * 0.5 - this.panelCenterY) * uiScale + (this.panelBounds.y + this.panelBounds.height * 0.5 - this.panelCenterY);
+
+            button.container.clear();
+            button.container.roundRect(x - width * 0.5, y - height * 0.5, width, height, Math.max(14, width * 0.22));
+            button.container.fill({ color: bgColor, alpha: (0.88 + button.selectionBlend * 0.12) * uiAlpha });
+            button.container.stroke({ color: 0xc48d54, alpha: 0.92, width: 3 });
+
+            button.selection.clear();
+            button.selection.roundRect(x - width * 0.56, y - height * 0.56, width * 1.12, height * 1.12, Math.max(16, width * 0.28));
+            button.selection.fill({ color: 0xffdca0, alpha: selectionAlpha });
+            button.selection.visible = button.selectionBlend > 0.01;
+
+            button.icon.position.set(x, y);
+            const iconSize = button.hitArea.width * 0.68 * (1 + button.selectionBlend * 0.1 + pulse) * uiScale;
+            button.icon.width = iconSize;
+            button.icon.height = iconSize;
+            button.icon.alpha = (0.9 + button.selectionBlend * 0.1) * uiAlpha;
+        }
+    }
+
+    private animatePlanButton(deltaSeconds: number) {
+        this.planButton.pulseTime += Math.max(0, deltaSeconds);
+        const uiScale = this.getUIScale();
+        const uiAlpha = this.visibility;
+        const pulse = Math.sin(this.planButton.pulseTime * PLAN_BUTTON_PULSE_SPEED) * PLAN_BUTTON_PULSE_AMOUNT;
+        const width = this.planButtonWidth * (1 + pulse) * uiScale;
+        const height = this.planButtonHeight * (1 + pulse) * uiScale;
+        const x = this.planBounds.x + this.planBounds.width * 0.5;
+        const y = this.planBounds.y + this.planBounds.height * 0.5;
+
+        this.planButton.container.clear();
+        this.planButton.container.roundRect(x - width * 0.5, y - height * 0.5, width, height, Math.max(14, height * 0.26));
+        this.planButton.container.fill({ color: 0xefbc5e, alpha: 0.96 * uiAlpha });
+        this.planButton.container.stroke({ color: 0xfff8e6, width: 3, alpha: 0.98 * uiAlpha });
+        this.planButton.label.position.set(x, y);
+        this.planButton.label.alpha = uiAlpha;
+    }
+
+    private isInteractive() {
+        return this.visibilityTarget > 0 && this.visibility >= INTERACTIVE_THRESHOLD;
+    }
+
+    private isPointInsideBounds(screenX: number, screenY: number, bounds: Bounds2D) {
+        return (
+            screenX >= bounds.x &&
+            screenX <= bounds.x + bounds.width &&
+            screenY >= bounds.y &&
+            screenY <= bounds.y + bounds.height
+        );
+    }
+
+    private getUIScale() {
+        return this.lerp(VISIBILITY_HIDDEN_SCALE, 1, this.easeOutCubic(this.visibility));
+    }
+
+    private pickPlantAtScreenPoint(screenX: number, screenY: number) {
+        for (const button of this.buttons) {
+            if (this.isPointInsideBounds(screenX, screenY, button.hitArea)) {
+                return button.id;
             }
         }
 
-        this.animateButtons(0);
-    }
-
-    private refreshVisibilityState(deltaSeconds: number) {
-        this.visibilityAnimation.update(deltaSeconds);
-        this.visibilityFrame = this.visibilityAnimation.getFrame();
-
-        const animatedPanelCenterY = this.panelCenterY + this.visibilityFrame.offsetY;
-
-        this.overlayContainer.setVisible(this.visibilityFrame.isRenderable);
-        this.overlayContainer.setOpacity(this.visibilityFrame.opacity);
-        this.overlayContainer.setTransform(0, animatedPanelCenterY, this.visibilityFrame.scale);
-        const animatedPlanButtonCenterY = this.planButtonCenterY + this.visibilityFrame.offsetY;
-        this.updatePanelScreenBounds(animatedPanelCenterY, animatedPlanButtonCenterY);
-
-        this.planButtonMesh.visible = this.visibilityFrame.isRenderable;
-        this.planButtonMesh.position.set(0, animatedPlanButtonCenterY, this.planButtonMesh.position.z);
-    }
-
-    private updatePanelScreenBounds(panelCenterY: number, planButtonCenterY: number) {
-        this.panelScreenWidth = this.panelWidth * this.visibilityFrame.scale;
-        this.panelScreenHeight = this.panelHeight * this.visibilityFrame.scale;
-        this.panelScreenX = (this.viewportWidth - this.panelScreenWidth) * 0.5;
-        this.panelScreenY =
-            this.viewportHeight * 0.5 - (panelCenterY + this.panelScreenHeight * 0.5);
-
-        this.planButtonScreenWidth = this.planButtonWidth * this.visibilityFrame.scale;
-        this.planButtonScreenHeight = this.planButtonHeight * this.visibilityFrame.scale;
-        this.planButtonScreenX = (this.viewportWidth - this.planButtonScreenWidth) * 0.5;
-        this.planButtonScreenY =
-            this.viewportHeight * 0.5 -
-            (planButtonCenterY + this.planButtonScreenHeight * 0.5);
+        return null;
     }
 
     private readonly handlePointerDown = (event: PointerEvent) => {
@@ -549,401 +513,48 @@ export class PlaceVegetablesUI {
             return;
         }
 
-        if (this.isInsidePlanButtonScreenPoint(event.clientX, event.clientY)) {
+        if (this.isPointInsideBounds(event.clientX, event.clientY, this.planBounds)) {
             audioManager.playClick();
             this.onPlanRequested?.();
             return;
         }
 
         const plantId = this.pickPlantAtScreenPoint(event.clientX, event.clientY);
-
-        if (!plantId) {
+        if (!plantId || !isPlantId(plantId)) {
             return;
         }
 
         audioManager.playClick();
         this.selectedPlantId = plantId;
-        this.applySelectionVisuals({ triggerPop: true });
         this.onPlantSelected?.(plantId);
     };
 
-    private pickPlantAtScreenPoint(screenX: number, screenY: number) {
-        const bounds = this.inputElement.getBoundingClientRect();
-
-        if (bounds.width <= 0 || bounds.height <= 0) {
-            return null;
-        }
-
-        this.normalizedPointer.set(
-            ((screenX - bounds.left) / bounds.width) * 2 - 1,
-            -((screenY - bounds.top) / bounds.height) * 2 + 1,
-        );
-        this.raycaster.setFromCamera(this.normalizedPointer, this.overlayCamera);
-
-        const intersections = this.raycaster.intersectObjects(
-            this.buttonHitMeshes,
-            false,
-        );
-
-        if (intersections.length === 0) {
-            return null;
-        }
-
-        const selectedId = intersections[0]?.object.userData?.plantId;
-
-        if (isPlantId(selectedId)) {
-            return selectedId;
-        }
-
-        return null;
+    private clamp(value: number, min: number, max: number) {
+        return Math.max(min, Math.min(max, value));
     }
 
-    private isInsidePlanButtonScreenPoint(screenX: number, screenY: number) {
-        const hitPadding = 4;
-
-        return (
-            screenX >= this.planButtonScreenX - hitPadding &&
-            screenX <= this.planButtonScreenX + this.planButtonScreenWidth + hitPadding &&
-            screenY >= this.planButtonScreenY - hitPadding &&
-            screenY <= this.planButtonScreenY + this.planButtonScreenHeight + hitPadding
-        );
+    private lerp(from: number, to: number, t: number) {
+        return from + (to - from) * this.clamp(t, 0, 1);
     }
 
-    private createRoundedFrameTexture(options: RoundedFrameTextureOptions) {
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
-
-        canvas.width = BUTTON_FRAME_TEXTURE_SIZE;
-        canvas.height = BUTTON_FRAME_TEXTURE_SIZE;
-
-        const texture = new THREE.CanvasTexture(canvas);
-        texture.colorSpace = THREE.SRGBColorSpace;
-        texture.generateMipmaps = true;
-        texture.minFilter = THREE.LinearMipmapLinearFilter;
-        texture.magFilter = THREE.LinearFilter;
-
-        if (!context) {
-            texture.needsUpdate = true;
-            return texture;
-        }
-
-        const size = BUTTON_FRAME_TEXTURE_SIZE;
-        const padding = Math.round(size * (options.feather ?? 0.08));
-        const radius = Math.round(size * 0.22);
-        const rectX = padding;
-        const rectY = padding;
-        const rectWidth = size - padding * 2;
-        const rectHeight = size - padding * 2;
-
-        context.clearRect(0, 0, size, size);
-
-        context.save();
-        context.shadowColor = options.outerShadowColor ?? 'rgba(0, 0, 0, 0.22)';
-        context.shadowBlur = Math.round(size * 0.08);
-        context.shadowOffsetY = Math.round(size * 0.02);
-        this.drawRoundedRect(
-            context,
-            rectX + Math.round(size * 0.01),
-            rectY + Math.round(size * 0.02),
-            rectWidth - Math.round(size * 0.02),
-            rectHeight - Math.round(size * 0.02),
-            radius,
-        );
-        context.fillStyle = 'rgba(0, 0, 0, 0.32)';
-        context.fill();
-        context.restore();
-
-        const fillBottomColor: string | undefined = options.fillBottomColor;
-        const fillGradient = fillBottomColor
-            ? context.createLinearGradient(0, rectY, 0, rectY + rectHeight)
-            : null;
-
-        if (fillGradient) {
-            fillGradient.addColorStop(0, options.fillColor);
-            fillGradient.addColorStop(1, fillBottomColor as string);
-        }
-
-        this.drawRoundedRect(
-            context,
-            rectX,
-            rectY,
-            rectWidth,
-            rectHeight,
-            radius,
-        );
-        context.fillStyle = fillGradient ?? options.fillColor;
-        context.fill();
-        context.lineWidth = options.borderWidth;
-        context.strokeStyle = options.borderColor;
-        context.stroke();
-
-        if (options.innerStrokeColor) {
-            context.lineWidth = Math.max(2, Math.round(options.borderWidth * 0.3));
-            context.strokeStyle = options.innerStrokeColor;
-            this.drawRoundedRect(
-                context,
-                rectX + options.borderWidth * 0.56,
-                rectY + options.borderWidth * 0.56,
-                rectWidth - options.borderWidth * 1.12,
-                rectHeight - options.borderWidth * 1.12,
-                Math.max(16, Math.round(radius * 0.84)),
-            );
-            context.stroke();
-        }
-
-        if (options.gloss) {
-            const glossGradient = context.createLinearGradient(
-                0,
-                rectY,
-                0,
-                rectY + rectHeight * 0.56,
-            );
-            glossGradient.addColorStop(0, 'rgba(255, 255, 255, 0.4)');
-            glossGradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
-            context.fillStyle = glossGradient;
-            this.drawRoundedRect(
-                context,
-                rectX + options.borderWidth,
-                rectY + options.borderWidth,
-                rectWidth - options.borderWidth * 2,
-                rectHeight * 0.56,
-                Math.max(16, Math.round(radius * 0.85)),
-            );
-            context.fill();
-        }
-
-        texture.needsUpdate = true;
-
-        return texture;
+    private easeOutCubic(value: number) {
+        const t = this.clamp(value, 0, 1);
+        const inverse = 1 - t;
+        return 1 - inverse * inverse * inverse;
     }
 
-    private createPlanButtonTexture() {
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
+    private mixColor(from: number, to: number, t: number) {
+        const ratio = this.clamp(t, 0, 1);
+        const fr = (from >> 16) & 0xff;
+        const fg = (from >> 8) & 0xff;
+        const fb = from & 0xff;
+        const tr = (to >> 16) & 0xff;
+        const tg = (to >> 8) & 0xff;
+        const tb = to & 0xff;
+        const r = Math.round(this.lerp(fr, tr, ratio));
+        const g = Math.round(this.lerp(fg, tg, ratio));
+        const b = Math.round(this.lerp(fb, tb, ratio));
 
-        canvas.width = PLAN_BUTTON_TEXTURE_WIDTH;
-        canvas.height = PLAN_BUTTON_TEXTURE_HEIGHT;
-
-        const texture = new THREE.CanvasTexture(canvas);
-        texture.colorSpace = THREE.SRGBColorSpace;
-        texture.generateMipmaps = true;
-        texture.minFilter = THREE.LinearMipmapLinearFilter;
-        texture.magFilter = THREE.LinearFilter;
-
-        if (!context) {
-            texture.needsUpdate = true;
-            return texture;
-        }
-
-        const width = canvas.width;
-        const height = canvas.height;
-        const padding = Math.round(height * 0.07);
-        const radius = Math.round(height * 0.26);
-        const x = padding;
-        const y = padding;
-        const buttonWidth = width - padding * 2;
-        const buttonHeight = height - padding * 2;
-
-        context.clearRect(0, 0, width, height);
-
-        context.save();
-        context.shadowColor = 'rgba(63, 36, 10, 0.36)';
-        context.shadowBlur = Math.round(height * 0.11);
-        context.shadowOffsetY = Math.round(height * 0.035);
-        this.drawRoundedRect(
-            context,
-            x + Math.round(height * 0.02),
-            y + Math.round(height * 0.018),
-            buttonWidth - Math.round(height * 0.04),
-            buttonHeight - Math.round(height * 0.04),
-            radius,
-        );
-        context.fillStyle = 'rgba(54, 37, 18, 0.34)';
-        context.fill();
-        context.restore();
-
-        const fillGradient = context.createLinearGradient(0, y, 0, y + buttonHeight);
-        fillGradient.addColorStop(0, 'rgba(249, 224, 152, 1)');
-        fillGradient.addColorStop(0.58, 'rgba(239, 188, 94, 1)');
-        fillGradient.addColorStop(1, 'rgba(214, 150, 63, 1)');
-
-        this.drawRoundedRect(context, x, y, buttonWidth, buttonHeight, radius);
-        context.fillStyle = fillGradient;
-        context.fill();
-
-        context.lineWidth = Math.max(5, Math.round(height * 0.034));
-        context.strokeStyle = 'rgba(255, 248, 230, 0.98)';
-        context.stroke();
-
-        context.lineWidth = Math.max(2, Math.round(height * 0.014));
-        context.strokeStyle = 'rgba(163, 98, 26, 0.94)';
-        this.drawRoundedRect(
-            context,
-            x + context.lineWidth,
-            y + context.lineWidth,
-            buttonWidth - context.lineWidth * 2,
-            buttonHeight - context.lineWidth * 2,
-            Math.max(12, Math.round(radius * 0.84)),
-        );
-        context.stroke();
-
-        context.font = `700 ${Math.round(height * 0.34)}px "Trebuchet MS", "Verdana", sans-serif`;
-        context.textAlign = 'center';
-        context.textBaseline = 'middle';
-        context.fillStyle = '#fffaf1';
-        context.strokeStyle = 'rgba(122, 65, 16, 0.88)';
-        context.lineWidth = Math.max(2, Math.round(height * 0.02));
-        context.strokeText('Plant', width * 0.5, height * 0.52);
-        context.fillText('Plant', width * 0.5, height * 0.52);
-
-        texture.needsUpdate = true;
-
-        return texture;
-    }
-
-    private drawRoundedRect(
-        context: CanvasRenderingContext2D,
-        x: number,
-        y: number,
-        width: number,
-        height: number,
-        radius: number,
-    ) {
-        const clampedRadius = Math.max(0, Math.min(radius, Math.min(width, height) * 0.5));
-
-        context.beginPath();
-        context.moveTo(x + clampedRadius, y);
-        context.lineTo(x + width - clampedRadius, y);
-        context.quadraticCurveTo(x + width, y, x + width, y + clampedRadius);
-        context.lineTo(x + width, y + height - clampedRadius);
-        context.quadraticCurveTo(x + width, y + height, x + width - clampedRadius, y + height);
-        context.lineTo(x + clampedRadius, y + height);
-        context.quadraticCurveTo(x, y + height, x, y + height - clampedRadius);
-        context.lineTo(x, y + clampedRadius);
-        context.quadraticCurveTo(x, y, x + clampedRadius, y);
-        context.closePath();
-    }
-
-    private animatePlanButton(deltaSeconds: number) {
-        const hasFrameDelta = deltaSeconds > 0;
-        const uiOpacity = this.visibilityFrame.opacity;
-        const uiScale = this.visibilityFrame.scale;
-        const isUIRenderable = this.visibilityFrame.isRenderable;
-
-        if (hasFrameDelta) {
-            this.planButtonPulseTime += deltaSeconds;
-        }
-
-        const pulse = Math.sin(this.planButtonPulseTime * PLAN_BUTTON_PULSE_SPEED) * PLAN_BUTTON_PULSE_AMOUNT;
-        const scale = (1 + pulse) * uiScale;
-        this.planButtonMesh.visible = isUIRenderable;
-        this.planButtonMesh.scale.set(
-            this.planButtonWidth * scale,
-            this.planButtonHeight * scale,
-            1,
-        );
-        this.planButtonMesh.material.opacity = PLAN_BUTTON_OPACITY * uiOpacity;
-    }
-
-    private animateButtons(deltaSeconds: number) {
-        const hasFrameDelta = deltaSeconds > 0;
-        const blendFactor = hasFrameDelta
-            ? 1 - Math.exp(-SELECTION_BLEND_SPEED * deltaSeconds)
-            : 1;
-        const uiOpacity = this.visibilityFrame.opacity;
-        const uiScale = this.visibilityFrame.scale;
-        const uiVerticalOffset = this.visibilityFrame.offsetY;
-        const isUIRenderable = this.visibilityFrame.isRenderable;
-
-        for (const button of this.buttons) {
-            const isSelected = button.id === this.selectedPlantId;
-            const targetBlend = isSelected ? 1 : 0;
-
-            button.selectionBlend = THREE.MathUtils.lerp(
-                button.selectionBlend,
-                targetBlend,
-                blendFactor,
-            );
-
-            if (isSelected && hasFrameDelta) {
-                button.pulseTime += deltaSeconds;
-            }
-
-            if (hasFrameDelta && button.popElapsed < button.popDuration) {
-                button.popElapsed = Math.min(
-                    button.popElapsed + deltaSeconds,
-                    button.popDuration,
-                );
-            }
-
-            const popProgress =
-                button.popDuration <= 0
-                    ? 1
-                    : THREE.MathUtils.clamp(
-                        button.popElapsed / button.popDuration,
-                        0,
-                        1,
-                    );
-            const popAmount = Math.sin(popProgress * Math.PI) * (1 - popProgress) * 0.24;
-            const pulseAmount = isSelected
-                ? Math.sin(button.pulseTime * SELECTION_PULSE_SPEED) * 0.016
-                : 0;
-            const buttonScale =
-                1 + button.selectionBlend * 0.08 + popAmount * 0.9 + pulseAmount * 0.5;
-            const iconScale =
-                1 + button.selectionBlend * 0.1 + popAmount * 1.2 + pulseAmount * 0.9;
-            const verticalLift = popAmount * button.baseButtonSize * 0.15;
-
-            button.selectionMesh.visible = isUIRenderable && button.selectionBlend > 0.01;
-            button.selectionMesh.scale.set(
-                button.baseButtonSize *
-                1.12 *
-                (1 + popAmount * 0.45 + pulseAmount * 0.5) *
-                uiScale,
-                button.baseButtonSize *
-                1.12 *
-                (1 + popAmount * 0.45 + pulseAmount * 0.5) *
-                uiScale,
-                1,
-            );
-            button.selectionMesh.position.set(
-                button.baseX,
-                button.baseY + verticalLift + uiVerticalOffset,
-                0,
-            );
-            button.selectionMesh.material.opacity =
-                (0.08 + button.selectionBlend * 0.46) *
-                (isSelected ? 0.95 + Math.sin(button.pulseTime * 6.3) * 0.05 : 1) *
-                uiOpacity;
-
-            button.hitMesh.visible = isUIRenderable;
-            button.hitMesh.scale.set(
-                button.baseButtonSize * buttonScale * uiScale,
-                button.baseButtonSize * buttonScale * uiScale,
-                1,
-            );
-            button.hitMesh.position.set(
-                button.baseX,
-                button.baseY + verticalLift + uiVerticalOffset,
-                0,
-            );
-            button.hitMesh.material.color
-                .copy(this.defaultButtonColor)
-                .lerp(this.activeButtonColor, button.selectionBlend);
-            button.hitMesh.material.opacity = (0.88 + button.selectionBlend * 0.12) * uiOpacity;
-
-            button.iconMesh.visible = isUIRenderable;
-            button.iconMesh.scale.set(
-                button.baseIconSize * iconScale * uiScale,
-                button.baseIconSize * iconScale * uiScale,
-                1,
-            );
-            button.iconMesh.position.set(
-                button.baseX,
-                button.baseY + verticalLift + uiVerticalOffset,
-                0,
-            );
-            button.iconMesh.material.opacity = (0.9 + button.selectionBlend * 0.1) * uiOpacity;
-        }
+        return (r << 16) | (g << 8) | b;
     }
 }

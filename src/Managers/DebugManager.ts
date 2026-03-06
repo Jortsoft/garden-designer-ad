@@ -1,6 +1,17 @@
 import * as THREE from 'three';
-import type { LightSettingKey } from '../Models/LightManager.model';
-import type { PostProcessingSettingKey } from '../Models/PostProcessing.model';
+import {
+    Container,
+    Graphics,
+    Text,
+    type TextStyleOptions,
+} from 'pixi.js';
+import type {
+    DebugActiveSlider,
+    DebugMetric,
+    DebugPanelRect,
+    DebugPerformanceStats,
+} from '../Models/DebugManager.model';
+import { PixiUI } from '../Systems/PixiUI';
 import { GameConfig } from './GameConfig';
 import { LIGHT_CONTROLS, LightingManager } from './LightingManager';
 import { POST_PROCESSING_CONTROLS, PostProcessingManager } from './PostProcessingManager';
@@ -35,25 +46,68 @@ const STATS_COLUMN_GAP = 12;
 const STATS_LABEL_Y_OFFSET = 4;
 const STATS_VALUE_Y_OFFSET = 19;
 
+const STYLE_FPS: Readonly<TextStyleOptions> = {
+    fontFamily: 'monospace',
+    fontSize: 28,
+    fill: '#8ef5a4',
+    fontWeight: '700',
+};
+const STYLE_CAPTION: Readonly<TextStyleOptions> = {
+    fontFamily: 'monospace',
+    fontSize: 16,
+    fill: '#ffffff',
+};
+const STYLE_SECTION: Readonly<TextStyleOptions> = {
+    fontFamily: 'monospace',
+    fontSize: 15,
+    fill: '#c8d0ff',
+};
+const STYLE_SUBTITLE: Readonly<TextStyleOptions> = {
+    fontFamily: 'monospace',
+    fontSize: 15,
+    fill: 'rgba(255, 255, 255, 0.5)',
+};
+const STYLE_LABEL: Readonly<TextStyleOptions> = {
+    fontFamily: 'monospace',
+    fontSize: 15,
+    fill: '#ffffff',
+};
+const STYLE_VALUE: Readonly<TextStyleOptions> = {
+    fontFamily: 'monospace',
+    fontSize: 15,
+    fill: '#c8d0ff',
+};
+const STYLE_METRIC_LABEL: Readonly<TextStyleOptions> = {
+    fontFamily: 'monospace',
+    fontSize: 11,
+    fill: 'rgba(255, 255, 255, 0.52)',
+};
+const STYLE_METRIC_VALUE: Readonly<TextStyleOptions> = {
+    fontFamily: 'monospace',
+    fontSize: 15,
+    fill: '#ffffff',
+};
+const STYLE_TOGGLE_BUTTON: Readonly<TextStyleOptions> = {
+    fontFamily: 'monospace',
+    fontSize: 14,
+    fill: '#ffffff',
+};
+
+type HorizontalTextAlign = 'left' | 'center' | 'right';
+
 export class DebugManager {
     private readonly inputElement: HTMLElement;
     private readonly renderer: THREE.WebGLRenderer;
     private readonly lightingManager: LightingManager;
     private readonly postProcessingManager: PostProcessingManager;
+    private readonly pixiUI: PixiUI;
     private readonly isEnabled = GameConfig.debugMode;
-    private readonly overlayScene = new THREE.Scene();
-    private readonly overlayCamera = new THREE.OrthographicCamera(0, 1, 0, 1, 0, 10);
-    private readonly overlayCanvas: HTMLCanvasElement;
-    private readonly overlayContext: CanvasRenderingContext2D | null;
-    private readonly overlayTexture: THREE.CanvasTexture | null;
-    private readonly overlayPanel:
-        | THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>
-        | null;
+    private readonly panelRoot = new Container();
+    private readonly panelGraphics = new Graphics();
+    private readonly textLayer = new Container();
+    private readonly textPool: Text[] = [];
 
-    private activeSlider:
-        | { domain: 'post'; key: PostProcessingSettingKey }
-        | { domain: 'light'; key: LightSettingKey }
-        | null = null;
+    private activeSlider: DebugActiveSlider = null;
     private fpsFrameCount = 0;
     private fpsElapsedTime = 0;
     private displayedFps = GameConfig.Fps;
@@ -64,7 +118,8 @@ export class DebugManager {
     private panelScreenY = 0;
     private panelScreenWidth = 0;
     private panelScreenHeight = 0;
-    private readonly performanceStats = {
+    private textCursor = 0;
+    private readonly performanceStats: DebugPerformanceStats = {
         batches: 0,
         geometries: 0,
         lines: 0,
@@ -80,40 +135,20 @@ export class DebugManager {
         renderer: THREE.WebGLRenderer,
         lightingManager: LightingManager,
         postProcessingManager: PostProcessingManager,
+        pixiUI: PixiUI,
     ) {
         this.inputElement = inputElement;
         this.renderer = renderer;
         this.lightingManager = lightingManager;
         this.postProcessingManager = postProcessingManager;
-        this.overlayCanvas = document.createElement('canvas');
-        this.overlayCanvas.width = this.getCurrentPanelWidth();
-        this.overlayCanvas.height = this.getCurrentPanelHeight();
-        this.overlayContext = this.overlayCanvas.getContext('2d');
-        this.overlayCamera.position.z = 1;
+        this.pixiUI = pixiUI;
 
-        if (this.overlayContext) {
-            this.overlayTexture = new THREE.CanvasTexture(this.overlayCanvas);
-            this.overlayTexture.colorSpace = THREE.SRGBColorSpace;
-
-            const overlayMaterial = new THREE.MeshBasicMaterial({
-                map: this.overlayTexture,
-                transparent: true,
-                depthTest: false,
-                depthWrite: false,
-                side: THREE.DoubleSide,
-            });
-            overlayMaterial.toneMapped = false;
-
-            this.overlayPanel = new THREE.Mesh(
-                new THREE.PlaneGeometry(1, 1),
-                overlayMaterial,
-            );
-            this.overlayPanel.renderOrder = 999;
-            this.overlayScene.add(this.overlayPanel);
-        } else {
-            this.overlayTexture = null;
-            this.overlayPanel = null;
-        }
+        this.panelRoot.visible = false;
+        this.panelRoot.zIndex = 100;
+        this.panelGraphics.zIndex = 0;
+        this.textLayer.zIndex = 1;
+        this.panelRoot.addChild(this.panelGraphics);
+        this.panelRoot.addChild(this.textLayer);
     }
 
     initialize() {
@@ -121,10 +156,13 @@ export class DebugManager {
             return;
         }
 
+        this.panelRoot.visible = true;
+        this.pixiUI.root.addChild(this.panelRoot);
         this.updateViewport(
             this.inputElement.clientWidth || window.innerWidth,
             this.inputElement.clientHeight || window.innerHeight,
         );
+        this.refreshPerformanceSummary();
         this.drawOverlay();
 
         this.inputElement.addEventListener('pointerdown', this.handlePointerDown);
@@ -139,25 +177,18 @@ export class DebugManager {
         }
 
         this.updateFpsCounter(deltaSeconds);
-    }
 
-    render() {
-        if (!this.isEnabled || !this.overlayPanel) {
+        if (!this.shouldRefreshPerformanceSummary) {
             return;
         }
 
-        if (this.shouldRefreshPerformanceSummary) {
-            this.refreshPerformanceSummary();
-            this.drawOverlay();
-            this.shouldRefreshPerformanceSummary = false;
-        }
+        this.refreshPerformanceSummary();
+        this.drawOverlay();
+        this.shouldRefreshPerformanceSummary = false;
+    }
 
-        const previousAutoClear = this.renderer.autoClear;
-
-        this.renderer.autoClear = false;
-        this.renderer.clearDepth();
-        this.renderer.render(this.overlayScene, this.overlayCamera);
-        this.renderer.autoClear = previousAutoClear;
+    render() {
+        // Rendered by shared PixiUI.
     }
 
     dispose() {
@@ -170,17 +201,13 @@ export class DebugManager {
         window.removeEventListener('pointerup', this.handlePointerUp);
         window.removeEventListener('blur', this.handleWindowBlur);
 
-        if (this.overlayPanel) {
-            this.overlayPanel.geometry.dispose();
-            this.overlayPanel.material.dispose();
-            this.overlayScene.remove(this.overlayPanel);
-        }
-
-        this.overlayTexture?.dispose();
+        this.pixiUI.root.removeChild(this.panelRoot);
+        this.panelRoot.destroy({ children: true });
+        this.textPool.length = 0;
     }
 
     updateViewport(width: number, height: number) {
-        if (!this.isEnabled || !this.overlayPanel) {
+        if (!this.isEnabled) {
             return;
         }
 
@@ -194,23 +221,14 @@ export class DebugManager {
         const panelDisplayWidth = currentPanelWidth * panelScale;
         const panelDisplayHeight = currentPanelHeight * panelScale;
 
-        this.overlayCamera.left = -width * 0.5;
-        this.overlayCamera.right = width * 0.5;
-        this.overlayCamera.top = height * 0.5;
-        this.overlayCamera.bottom = -height * 0.5;
-        this.overlayCamera.updateProjectionMatrix();
-
         this.panelScreenWidth = panelDisplayWidth;
         this.panelScreenHeight = panelDisplayHeight;
         this.panelScreenX = width - PANEL_MARGIN - panelDisplayWidth;
         this.panelScreenY = PANEL_MARGIN;
 
-        this.overlayPanel.scale.set(panelDisplayWidth, panelDisplayHeight, 1);
-        this.overlayPanel.position.set(
-            width * 0.5 - PANEL_MARGIN - panelDisplayWidth * 0.5,
-            height * 0.5 - PANEL_MARGIN - panelDisplayHeight * 0.5,
-            0,
-        );
+        this.panelRoot.position.set(this.panelScreenX, this.panelScreenY);
+        this.panelRoot.scale.set(panelScale, panelScale);
+        this.drawOverlay();
     }
 
     setInteractionLocked(isLocked: boolean) {
@@ -235,10 +253,6 @@ export class DebugManager {
     }
 
     private updateFpsCounter(deltaSeconds: number) {
-        if (!this.overlayTexture || !this.overlayContext) {
-            return;
-        }
-
         this.fpsFrameCount += 1;
         this.fpsElapsedTime += deltaSeconds;
 
@@ -246,58 +260,55 @@ export class DebugManager {
             return;
         }
 
-        this.displayedFps = this.fpsFrameCount / this.fpsElapsedTime;
+        this.displayedFps = this.fpsFrameCount / Math.max(this.fpsElapsedTime, Number.EPSILON);
         this.fpsFrameCount = 0;
         this.fpsElapsedTime = 0;
         this.shouldRefreshPerformanceSummary = true;
     }
 
     private drawOverlay() {
-        if (!this.overlayContext || !this.overlayTexture) {
-            return;
-        }
-
         const panelWidth = this.getCurrentPanelWidth();
         const panelHeight = this.getCurrentPanelHeight();
 
-        this.syncCanvasSize();
-        this.overlayContext.clearRect(0, 0, panelWidth, panelHeight);
-        this.overlayContext.fillStyle = this.isWindowVisible
-            ? 'rgba(8, 8, 12, 0.88)'
-            : 'rgba(8, 8, 12, 0.76)';
-        this.overlayContext.fillRect(0, 0, panelWidth, panelHeight);
-        this.overlayContext.strokeStyle = 'rgba(255, 255, 255, 0.16)';
-        this.overlayContext.lineWidth = 2;
-        this.overlayContext.strokeRect(1, 1, panelWidth - 2, panelHeight - 2);
+        this.panelGraphics.clear();
+        this.beginTextLayout();
+        this.panelGraphics.rect(0, 0, panelWidth, panelHeight);
+        this.panelGraphics.fill({
+            color: 0x08080c,
+            alpha: this.isWindowVisible ? 0.88 : 0.76,
+        });
+        this.panelGraphics.rect(1, 1, panelWidth - 2, panelHeight - 2);
+        this.panelGraphics.stroke({
+            color: 0xffffff,
+            alpha: 0.16,
+            width: 2,
+        });
 
         if (!this.isWindowVisible) {
             this.drawToggleButton();
-            this.overlayTexture.needsUpdate = true;
-
+            this.endTextLayout();
             return;
         }
 
-        this.overlayContext.textBaseline = 'middle';
-        this.overlayContext.textAlign = 'left';
-        this.overlayContext.fillStyle = '#8ef5a4';
-        this.overlayContext.font = '700 28px monospace';
-        this.overlayContext.fillText(`FPS ${Math.round(this.displayedFps)}`, 20, 28);
-
-        this.overlayContext.textAlign = 'right';
-        this.overlayContext.fillStyle = '#ffffff';
-        this.overlayContext.font = '16px monospace';
-        this.overlayContext.fillText(`Cap ${GameConfig.Fps}`, panelWidth - 18, 30);
-
-        this.overlayContext.textAlign = 'left';
-        this.overlayContext.fillStyle = '#c8d0ff';
-        this.overlayContext.font = '15px monospace';
-        this.overlayContext.fillText('Debug Controls', 20, 64);
-        this.overlayContext.fillStyle = 'rgba(255, 255, 255, 0.5)';
-        this.overlayContext.fillText('Post FX and lighting controls', 20, 84);
+        this.placeText(
+            `FPS ${Math.round(this.displayedFps)}`,
+            20,
+            28,
+            STYLE_FPS,
+            'left',
+        );
+        this.placeText(`Cap ${GameConfig.Fps}`, panelWidth - 18, 30, STYLE_CAPTION, 'right');
+        this.placeText('Debug Controls', 20, 64, STYLE_SECTION, 'left');
+        this.placeText(
+            'Post FX and lighting controls',
+            20,
+            84,
+            STYLE_SUBTITLE,
+            'left',
+        );
 
         this.drawToggleButton();
         this.drawPerformanceSummary();
-
         this.drawSectionTitle(
             'Post Processing',
             this.getPostControlsStartY() - SECTION_TITLE_HEIGHT + SECTION_TITLE_BASELINE_OFFSET,
@@ -316,7 +327,7 @@ export class DebugManager {
             this.drawLightSlider(index);
         }
 
-        this.overlayTexture.needsUpdate = true;
+        this.endTextLayout();
     }
 
     private refreshPerformanceSummary() {
@@ -331,17 +342,11 @@ export class DebugManager {
         this.performanceStats.textures = memoryInfo.textures;
         this.performanceStats.triangles = renderInfo.triangles;
         this.performanceStats.vertices =
-            renderInfo.triangles * 3 +
-            renderInfo.lines * 2 +
-            renderInfo.points;
+            renderInfo.triangles * 3 + renderInfo.lines * 2 + renderInfo.points;
     }
 
     private drawPerformanceSummary() {
-        if (!this.overlayContext) {
-            return;
-        }
-
-        const metrics = [
+        const metrics: readonly DebugMetric[] = [
             { label: 'MS', value: this.formatFrameTime(this.getAverageFrameTimeMilliseconds()) },
             { label: 'Batches', value: this.formatCompactNumber(this.performanceStats.batches) },
             { label: 'Verts', value: this.formatCompactNumber(this.performanceStats.vertices) },
@@ -367,34 +372,25 @@ export class DebugManager {
             const cellLeft = SLIDER_TRACK_X + columnIndex * (columnWidth + STATS_COLUMN_GAP);
             const cellTop = STATS_SECTION_TOP + SECTION_TITLE_HEIGHT + rowIndex * STATS_ROW_HEIGHT;
 
-            this.overlayContext.textAlign = 'left';
-            this.overlayContext.fillStyle = 'rgba(255, 255, 255, 0.52)';
-            this.overlayContext.font = '11px monospace';
-            this.overlayContext.fillText(
+            this.placeText(
                 metrics[index].label,
                 cellLeft,
                 cellTop + STATS_LABEL_Y_OFFSET,
+                STYLE_METRIC_LABEL,
+                'left',
             );
-
-            this.overlayContext.fillStyle = '#ffffff';
-            this.overlayContext.font = '15px monospace';
-            this.overlayContext.fillText(
+            this.placeText(
                 metrics[index].value,
                 cellLeft,
                 cellTop + STATS_VALUE_Y_OFFSET,
+                STYLE_METRIC_VALUE,
+                'left',
             );
         }
     }
 
     private drawSectionTitle(label: string, baselineY: number) {
-        if (!this.overlayContext) {
-            return;
-        }
-
-        this.overlayContext.textAlign = 'left';
-        this.overlayContext.fillStyle = '#c8d0ff';
-        this.overlayContext.font = '15px monospace';
-        this.overlayContext.fillText(label, 20, baselineY);
+        this.placeText(label, 20, baselineY, STYLE_SECTION, 'left');
     }
 
     private getAverageFrameTimeMilliseconds() {
@@ -449,86 +445,123 @@ export class DebugManager {
         controlValue: number,
         rowTop: number,
     ) {
-        if (!this.overlayContext) {
-            return;
-        }
-
         const sliderProgress =
             (controlValue - control.min) / Math.max(control.max - control.min, Number.EPSILON);
+        const clampedProgress = THREE.MathUtils.clamp(sliderProgress, 0, 1);
         const trackTop = rowTop + 18;
-        const knobCenterX = SLIDER_TRACK_X + SLIDER_TRACK_WIDTH * sliderProgress;
+        const knobCenterX = SLIDER_TRACK_X + SLIDER_TRACK_WIDTH * clampedProgress;
         const knobCenterY = trackTop + SLIDER_TRACK_HEIGHT * 0.5;
 
-        this.overlayContext.textAlign = 'left';
-        this.overlayContext.fillStyle = '#ffffff';
-        this.overlayContext.font = '15px monospace';
-        this.overlayContext.fillText(control.label, SLIDER_TRACK_X, rowTop + SLIDER_LABEL_Y_OFFSET);
-
-        this.overlayContext.textAlign = 'right';
-        this.overlayContext.fillStyle = '#c8d0ff';
-        this.overlayContext.fillText(
+        this.placeText(control.label, SLIDER_TRACK_X, rowTop + SLIDER_LABEL_Y_OFFSET, STYLE_LABEL, 'left');
+        this.placeText(
             controlValue.toFixed(control.precision),
             PANEL_WIDTH - 18,
             rowTop + SLIDER_LABEL_Y_OFFSET,
+            STYLE_VALUE,
+            'right',
         );
 
-        this.overlayContext.fillStyle = 'rgba(255, 255, 255, 0.12)';
-        this.overlayContext.fillRect(
+        this.panelGraphics.rect(SLIDER_TRACK_X, trackTop, SLIDER_TRACK_WIDTH, SLIDER_TRACK_HEIGHT);
+        this.panelGraphics.fill({
+            color: 0xffffff,
+            alpha: 0.12,
+        });
+
+        this.panelGraphics.rect(
             SLIDER_TRACK_X,
             trackTop,
-            SLIDER_TRACK_WIDTH,
+            SLIDER_TRACK_WIDTH * clampedProgress,
             SLIDER_TRACK_HEIGHT,
         );
+        this.panelGraphics.fill({
+            color: 0x8ef5a4,
+            alpha: 1,
+        });
 
-        this.overlayContext.fillStyle = '#8ef5a4';
-        this.overlayContext.fillRect(
-            SLIDER_TRACK_X,
-            trackTop,
-            SLIDER_TRACK_WIDTH * sliderProgress,
-            SLIDER_TRACK_HEIGHT,
-        );
-
-        this.overlayContext.fillStyle = '#ffffff';
-        this.overlayContext.beginPath();
-        this.overlayContext.arc(knobCenterX, knobCenterY, 7, 0, Math.PI * 2);
-        this.overlayContext.fill();
+        this.panelGraphics.circle(knobCenterX, knobCenterY, 7);
+        this.panelGraphics.fill({
+            color: 0xffffff,
+            alpha: 1,
+        });
     }
 
     private drawToggleButton() {
-        if (!this.overlayContext) {
-            return;
-        }
-
         const toggleButtonRect = this.getLocalToggleButtonRect();
 
-        if (!toggleButtonRect) {
-            return;
-        }
-
-        this.overlayContext.fillStyle = 'rgba(255, 255, 255, 0.08)';
-        this.overlayContext.fillRect(
+        this.panelGraphics.rect(
             toggleButtonRect.left,
             toggleButtonRect.top,
             toggleButtonRect.width,
             toggleButtonRect.height,
         );
-        this.overlayContext.strokeStyle = 'rgba(255, 255, 255, 0.18)';
-        this.overlayContext.lineWidth = 1;
-        this.overlayContext.strokeRect(
+        this.panelGraphics.fill({
+            color: 0xffffff,
+            alpha: 0.08,
+        });
+        this.panelGraphics.rect(
             toggleButtonRect.left,
             toggleButtonRect.top,
             toggleButtonRect.width,
             toggleButtonRect.height,
         );
+        this.panelGraphics.stroke({
+            color: 0xffffff,
+            alpha: 0.18,
+            width: 1,
+        });
 
-        this.overlayContext.textAlign = 'center';
-        this.overlayContext.fillStyle = '#ffffff';
-        this.overlayContext.font = '14px monospace';
-        this.overlayContext.fillText(
+        this.placeText(
             this.isWindowVisible ? 'Close Debug' : 'Open Debug',
             toggleButtonRect.left + toggleButtonRect.width * 0.5,
             toggleButtonRect.top + toggleButtonRect.height * 0.5,
+            STYLE_TOGGLE_BUTTON,
+            'center',
         );
+    }
+
+    private beginTextLayout() {
+        this.textCursor = 0;
+    }
+
+    private endTextLayout() {
+        for (let index = this.textCursor; index < this.textPool.length; index += 1) {
+            this.textPool[index].visible = false;
+        }
+    }
+
+    private placeText(
+        textValue: string,
+        x: number,
+        y: number,
+        style: Readonly<TextStyleOptions>,
+        align: HorizontalTextAlign,
+    ) {
+        let textNode = this.textPool[this.textCursor];
+
+        if (!textNode) {
+            textNode = new Text({
+                text: textValue,
+                style,
+            });
+            textNode.anchor.set(0, 0.5);
+            textNode.resolution = Math.min(window.devicePixelRatio || 1, 2);
+            this.textPool.push(textNode);
+            this.textLayer.addChild(textNode);
+        }
+
+        this.textCursor += 1;
+        textNode.visible = true;
+        textNode.text = textValue;
+        textNode.style = style;
+        if (align === 'left') {
+            textNode.anchor.x = 0;
+        } else if (align === 'center') {
+            textNode.anchor.x = 0.5;
+        } else {
+            textNode.anchor.x = 1;
+        }
+
+        textNode.position.set(x, y);
     }
 
     private readonly handlePointerDown = (event: PointerEvent) => {
@@ -548,9 +581,7 @@ export class DebugManager {
             return;
         }
 
-        if (this.tryStartSliderDrag(event)) {
-            return;
-        }
+        this.tryStartSliderDrag(event);
     };
 
     private readonly handlePointerMove = (event: PointerEvent) => {
@@ -715,6 +746,7 @@ export class DebugManager {
             this.lightingManager.setValue(this.activeSlider.key, sliderValue);
         }
 
+        this.shouldRefreshPerformanceSummary = true;
         this.drawOverlay();
     }
 
@@ -726,7 +758,7 @@ export class DebugManager {
         return this.getSliderScreenRect(index, this.getLightSectionStartY());
     }
 
-    private getSliderScreenRect(index: number, sectionStartY: number) {
+    private getSliderScreenRect(index: number, sectionStartY: number): DebugPanelRect | null {
         if (index < 0 || this.panelScreenWidth <= 0 || this.panelScreenHeight <= 0) {
             return null;
         }
@@ -772,17 +804,12 @@ export class DebugManager {
         return this.isWindowVisible ? this.getExpandedPanelHeight() : HIDDEN_PANEL_HEIGHT;
     }
 
-    private getToggleButtonScreenRect() {
+    private getToggleButtonScreenRect(): DebugPanelRect | null {
         if (this.panelScreenWidth <= 0 || this.panelScreenHeight <= 0) {
             return null;
         }
 
         const toggleButtonRect = this.getLocalToggleButtonRect();
-
-        if (!toggleButtonRect) {
-            return null;
-        }
-
         const scaleX = this.panelScreenWidth / this.getCurrentPanelWidth();
         const scaleY = this.panelScreenHeight / this.getCurrentPanelHeight();
 
@@ -794,26 +821,11 @@ export class DebugManager {
         };
     }
 
-    private syncCanvasSize() {
-        const currentPanelWidth = this.getCurrentPanelWidth();
-        const currentPanelHeight = this.getCurrentPanelHeight();
-
-        if (
-            this.overlayCanvas.width === currentPanelWidth &&
-            this.overlayCanvas.height === currentPanelHeight
-        ) {
-            return;
-        }
-
-        this.overlayCanvas.width = currentPanelWidth;
-        this.overlayCanvas.height = currentPanelHeight;
-    }
-
     private getCurrentPanelWidth() {
         return this.isWindowVisible ? PANEL_WIDTH : HIDDEN_PANEL_WIDTH;
     }
 
-    private getLocalToggleButtonRect() {
+    private getLocalToggleButtonRect(): DebugPanelRect {
         if (this.isWindowVisible) {
             return {
                 left: PANEL_WIDTH - TOGGLE_BUTTON_MARGIN_RIGHT - TOGGLE_BUTTON_WIDTH,

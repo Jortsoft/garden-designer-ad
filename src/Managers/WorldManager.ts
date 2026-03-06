@@ -12,6 +12,7 @@ import { PlaceHolderActivationManager } from './PlaceHolderActivationManager';
 import { PostProcessingManager } from './PostProcessingManager';
 import { CameraController } from '../Systems/CameraController';
 import { GameState } from '../Systems/GameState';
+import { PixiUI } from '../Systems/PixiUI';
 import { WindWaveSystem } from '../Effects/WindWaveEffect';
 import { PlaceVegetablesUI } from '../UI/PlaceVegetablesUI';
 import { SkipDayUI } from '../UI/SkipDayUI';
@@ -67,6 +68,7 @@ export class WorldManager {
     private readonly scene: THREE.Scene;
     private readonly lightingManager: LightingManager;
     private readonly postProcessingManager: PostProcessingManager;
+    private readonly pixiUI: PixiUI;
     private readonly cameraController: CameraController;
     private readonly debugManager: DebugManager;
     private readonly groundPlacementDebugManager: GroundPlacementDebugManager;
@@ -89,8 +91,10 @@ export class WorldManager {
         scene: THREE.Scene,
         inputElement: HTMLElement,
         renderer: THREE.WebGLRenderer,
+        pixiUI: PixiUI,
     ) {
         this.scene = scene;
+        this.pixiUI = pixiUI;
         this.camera = new THREE.PerspectiveCamera(55, 1, 0.01, 160);
         this.ground = new Ground(renderer.capabilities.getMaxAnisotropy());
         this.land = new Land(renderer.capabilities.getMaxAnisotropy());
@@ -107,11 +111,12 @@ export class WorldManager {
             renderer,
             this.lightingManager,
             this.postProcessingManager,
+            this.pixiUI,
         );
-        this.placeVegetablesUI = new PlaceVegetablesUI(inputElement, renderer);
-        this.skipDayUI = new SkipDayUI(inputElement, this.camera);
-        this.sickleUI = new SickleUI(inputElement, this.camera);
-        this.farmResourcesUI = new FarmResourcesUI(inputElement, renderer);
+        this.placeVegetablesUI = new PlaceVegetablesUI(inputElement, this.pixiUI);
+        this.skipDayUI = new SkipDayUI(inputElement, this.camera, this.pixiUI);
+        this.sickleUI = new SickleUI(inputElement, this.camera, this.pixiUI);
+        this.farmResourcesUI = new FarmResourcesUI(inputElement, this.pixiUI);
         this.skipDayUI.attachTo(this.land, SKIP_BUTTON_WORLD_OFFSET);
         this.sickleUI.attachTo(this.land, SKIP_BUTTON_WORLD_OFFSET);
         this.placeVegetablesUI.setOnPlantSelected(this.handlePlantSelected);
@@ -165,6 +170,10 @@ export class WorldManager {
     }
 
     async initialize() {
+        await this.pixiUI.initialize(
+            window.innerWidth,
+            window.innerHeight,
+        );
         this.lightingManager.initialize();
         this.debugManager.initialize();
         this.cameraController.initialize();
@@ -218,6 +227,7 @@ export class WorldManager {
         this.skipDayUI.render();
         this.sickleUI.render();
         this.farmResourcesUI.render();
+        this.pixiUI.render();
     }
 
     updateViewport(width: number, height: number) {
@@ -225,6 +235,7 @@ export class WorldManager {
         this.camera.updateProjectionMatrix();
         this.postProcessingManager.setSize(width, height);
         this.debugManager.updateViewport(width, height);
+        this.pixiUI.resize(width, height);
         this.placeVegetablesUI.updateViewport(width, height);
         this.skipDayUI.updateViewport(width, height);
         this.sickleUI.updateViewport(width, height);

@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import type { Sprite, Text, Texture } from 'pixi.js';
 import type { PlantId } from './PlaceVegetable.model';
 
 export interface ResourceDefinition {
@@ -8,12 +8,9 @@ export interface ResourceDefinition {
 
 export interface ResourceEntry {
     readonly id: PlantId;
-    readonly iconMesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-    readonly countMesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-    readonly countCanvas: HTMLCanvasElement;
-    readonly countContext: CanvasRenderingContext2D | null;
-    readonly countTexture: THREE.CanvasTexture;
-    iconTexture: THREE.Texture | null;
+    readonly icon: Sprite;
+    readonly countLabel: Text;
+    iconTexture: Texture | null;
     count: number;
 }
 
@@ -25,10 +22,13 @@ export interface ResourceGainBatch {
 
 export interface FlyingResourceIcon {
     readonly plantId: PlantId;
-    readonly mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-    readonly start: THREE.Vector2;
-    readonly control: THREE.Vector2;
-    readonly end: THREE.Vector2;
+    readonly icon: Sprite;
+    readonly startX: number;
+    readonly startY: number;
+    readonly controlX: number;
+    readonly controlY: number;
+    readonly endX: number;
+    readonly endY: number;
     readonly duration: number;
     readonly delay: number;
     readonly baseSize: number;

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GameConfig } from '../Managers/GameConfig';
 import { LoaderOverlay } from '../Systems/LoaderOverlay';
+import { PixiUI } from '../Systems/PixiUI';
 import { WorldManager } from '../Managers/WorldManager';
 import { hasCoarsePointerDevice } from '../Utils/hasCoarsePointerDevice';
 
@@ -8,6 +9,7 @@ export class GamePlayScene {
   private readonly container: HTMLElement;
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene: THREE.Scene;
+  private readonly pixiUI: PixiUI;
   private readonly worldManager: WorldManager;
   private readonly loaderOverlay: LoaderOverlay;
   private readonly frameClock = new THREE.Clock();
@@ -34,11 +36,14 @@ export class GamePlayScene {
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color('#00b5f7');
+    this.pixiUI = new PixiUI(this.container);
+    this.pixiUI.setVisible(false);
 
     this.worldManager = new WorldManager(
       this.scene,
       this.renderer.domElement,
       this.renderer,
+      this.pixiUI,
     );
     this.loaderOverlay = new LoaderOverlay(this.renderer);
 
@@ -67,6 +72,7 @@ export class GamePlayScene {
     this.renderer.setAnimationLoop(null);
     window.removeEventListener('resize', this.handleResize);
     this.worldManager.dispose();
+    this.pixiUI.dispose();
     this.loaderOverlay.dispose();
     this.renderer.dispose();
 
@@ -102,6 +108,7 @@ export class GamePlayScene {
 
     this.worldManager.update(deltaSeconds);
     this.loaderOverlay.update(deltaSeconds);
+    this.pixiUI.setVisible(!this.loaderOverlay.isActive());
     this.worldManager.render();
     this.loaderOverlay.render();
   };

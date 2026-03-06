@@ -1,5 +1,7 @@
 import * as THREE from 'three';
+import { Assets, Sprite, Texture } from 'pixi.js';
 import { audioManager } from '../Managers/AudioManager';
+import { PixiUI } from '../Systems/PixiUI';
 
 const SKIP_BUTTON_TEXTURE_PATH = 'assets/images/skip_day.png';
 const SKIP_BUTTON_MIN_PIXELS = 96;
@@ -15,14 +17,11 @@ const DEFAULT_WORLD_OFFSET = new THREE.Vector3(0, 0, 0);
 export class SkipDayUI {
     private readonly inputElement: HTMLElement;
     private readonly camera: THREE.PerspectiveCamera;
-    private readonly textureLoader = new THREE.TextureLoader();
-    private readonly raycaster = new THREE.Raycaster();
-    private readonly normalizedPointer = new THREE.Vector2();
-    private readonly anchorWorldPosition = new THREE.Vector3();
-    private readonly buttonWorldPosition = new THREE.Vector3();
-    private readonly worldGroup = new THREE.Group();
-    private readonly buttonMesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
-
+    private readonly pixiUI: PixiUI;
+    private readonly normalizedAnchorWorld = new THREE.Vector3();
+    private readonly projectedPosition = new THREE.Vector3();
+    private readonly sprite = new Sprite(Texture.WHITE);
+    private readonly fallbackObject3D = new THREE.Group();
     private viewportWidth = 1;
     private viewportHeight = 1;
     private animationTimeSeconds = 0;
@@ -33,32 +32,19 @@ export class SkipDayUI {
     private onSkipRequested: (() => void) | null = null;
     private anchorObject: THREE.Object3D | null = null;
     private worldOffset = DEFAULT_WORLD_OFFSET.clone();
+    private currentScreenX = 0;
+    private currentScreenY = 0;
+    private currentScreenSize = SKIP_BUTTON_MIN_PIXELS;
+    private isProjectedVisible = false;
 
-    constructor(
-        inputElement: HTMLElement,
-        camera: THREE.PerspectiveCamera,
-    ) {
+    constructor(inputElement: HTMLElement, camera: THREE.PerspectiveCamera, pixiUI: PixiUI) {
         this.inputElement = inputElement;
         this.camera = camera;
-
-        const material = new THREE.MeshBasicMaterial({
-            transparent: true,
-            opacity: SKIP_BUTTON_OPACITY,
-            depthTest: false,
-            depthWrite: false,
-            side: THREE.DoubleSide,
-        });
-        material.toneMapped = false;
-
-        this.buttonMesh = new THREE.Mesh(
-            new THREE.PlaneGeometry(1, 1),
-            material,
-        );
-        this.buttonMesh.visible = false;
-        this.buttonMesh.frustumCulled = false;
-        this.worldGroup.visible = false;
-        this.worldGroup.add(this.buttonMesh);
-        this.applyButtonTransform(0);
+        this.pixiUI = pixiUI;
+        this.sprite.anchor.set(0.5, 0.5);
+        this.sprite.alpha = SKIP_BUTTON_OPACITY;
+        this.sprite.visible = false;
+        this.sprite.zIndex = 24;
     }
 
     initialize() {
@@ -71,31 +57,29 @@ export class SkipDayUI {
         }
 
         this.isInitialized = true;
+        this.pixiUI.root.addChild(this.sprite);
         this.inputElement.addEventListener('pointerdown', this.handlePointerDown);
         this.updateViewport(
             this.inputElement.clientWidth || window.innerWidth,
             this.inputElement.clientHeight || window.innerHeight,
         );
         this.loadPromise = this.loadTexture();
-        this.applyButtonTransform(0);
 
         return this.loadPromise;
     }
 
     getObject3D() {
-        return this.worldGroup;
+        return this.fallbackObject3D;
     }
 
     attachTo(anchorObject: THREE.Object3D, worldOffset?: THREE.Vector3) {
         this.anchorObject = anchorObject;
-
         this.setWorldOffset(worldOffset ?? DEFAULT_WORLD_OFFSET);
     }
 
     setWorldOffset(worldOffset: THREE.Vector3) {
         this.worldOffset.copy(worldOffset);
-
-        this.applyButtonTransform(this.animationTimeSeconds);
+        this.updateProjection(0);
     }
 
     setOnSkipRequested(handler: (() => void) | null) {
@@ -109,15 +93,13 @@ export class SkipDayUI {
 
         this.isVisible = true;
         this.animationTimeSeconds = 0;
-        this.worldGroup.visible = true;
-        this.buttonMesh.visible = true;
-        this.applyButtonTransform(0);
+        this.updateProjection(0);
     }
 
     hide() {
         this.isVisible = false;
-        this.buttonMesh.visible = false;
-        this.worldGroup.visible = false;
+        this.sprite.visible = false;
+        this.isProjectedVisible = false;
     }
 
     update(deltaSeconds: number) {
@@ -126,21 +108,21 @@ export class SkipDayUI {
         }
 
         this.animationTimeSeconds += Math.max(0, deltaSeconds);
-        this.applyButtonTransform(this.animationTimeSeconds);
+        this.updateProjection(this.animationTimeSeconds);
     }
 
     render() {
-        // World-space button is rendered with the main scene.
+        // Rendered by shared PixiUI.
     }
 
     updateViewport(width: number, height: number) {
         this.viewportWidth = Math.max(width, 1);
         this.viewportHeight = Math.max(height, 1);
-        this.applyButtonTransform(this.animationTimeSeconds);
+        this.updateProjection(this.animationTimeSeconds);
     }
 
     isScreenPointBlocked(screenX: number, screenY: number) {
-        if (!this.isInitialized || this.isDisposed || !this.isVisible) {
+        if (!this.isInitialized || this.isDisposed || !this.isVisible || !this.isProjectedVisible) {
             return false;
         }
 
@@ -155,100 +137,73 @@ export class SkipDayUI {
         this.isDisposed = true;
         this.onSkipRequested = null;
         this.inputElement.removeEventListener('pointerdown', this.handlePointerDown);
-        this.buttonMesh.geometry.dispose();
-        this.buttonMesh.material.map?.dispose();
-        this.buttonMesh.material.dispose();
-        this.worldGroup.remove(this.buttonMesh);
-        this.worldGroup.parent?.remove(this.worldGroup);
+        this.pixiUI.root.removeChild(this.sprite);
+        this.sprite.destroy();
         this.anchorObject = null;
     }
 
     private async loadTexture() {
         try {
-            const texture = await this.textureLoader.loadAsync(SKIP_BUTTON_TEXTURE_PATH);
-
-            texture.colorSpace = THREE.SRGBColorSpace;
-            texture.minFilter = THREE.LinearMipmapLinearFilter;
-            texture.magFilter = THREE.LinearFilter;
-            texture.generateMipmaps = true;
-            texture.needsUpdate = true;
-            this.buttonMesh.material.map = texture;
-            this.buttonMesh.material.needsUpdate = true;
+            const texture = await Assets.load<Texture>(SKIP_BUTTON_TEXTURE_PATH);
+            this.sprite.texture = texture;
         } catch (error) {
             console.error(`Failed to load skip icon: ${SKIP_BUTTON_TEXTURE_PATH}`, error);
         }
     }
 
-    private applyButtonTransform(timeSeconds: number) {
-        this.updateWorldPosition(timeSeconds);
-        this.worldGroup.position.copy(this.buttonWorldPosition);
-        this.worldGroup.quaternion.copy(this.camera.quaternion);
-        this.worldGroup.updateWorldMatrix(false, false);
-
-        const pulse = Math.sin(timeSeconds * SKIP_BUTTON_PULSE_SPEED) * SKIP_BUTTON_PULSE_AMOUNT;
-        const scale = 1 + pulse;
-        const baseSizeWorld = this.getWorldSizeForPixels(this.getTargetPixelSize());
-        const buttonSize = Math.max(baseSizeWorld * scale, 0.001);
-
-        this.buttonMesh.scale.set(buttonSize, buttonSize, 1);
-        this.buttonMesh.material.opacity = SKIP_BUTTON_OPACITY;
-    }
-
-    private updateWorldPosition(timeSeconds: number) {
-        if (this.anchorObject) {
-            this.anchorObject.getWorldPosition(this.anchorWorldPosition);
-        } else {
-            this.anchorWorldPosition.set(0, 0, 0);
+    private updateProjection(timeSeconds: number) {
+        if (!this.isVisible || !this.anchorObject) {
+            this.sprite.visible = false;
+            this.isProjectedVisible = false;
+            return;
         }
 
+        this.anchorObject.getWorldPosition(this.normalizedAnchorWorld);
         const floatOffset = Math.sin(timeSeconds * SKIP_BUTTON_FLOAT_SPEED) * SKIP_BUTTON_FLOAT_AMPLITUDE_WORLD;
-        this.buttonWorldPosition.copy(this.anchorWorldPosition).add(this.worldOffset);
-        this.buttonWorldPosition.y += floatOffset;
-    }
+        this.normalizedAnchorWorld.add(this.worldOffset);
+        this.normalizedAnchorWorld.y += floatOffset;
+        this.projectedPosition.copy(this.normalizedAnchorWorld).project(this.camera);
 
-    private getTargetPixelSize() {
-        return THREE.MathUtils.clamp(
+        if (
+            this.projectedPosition.z < -1 ||
+            this.projectedPosition.z > 1 ||
+            !Number.isFinite(this.projectedPosition.x) ||
+            !Number.isFinite(this.projectedPosition.y)
+        ) {
+            this.sprite.visible = false;
+            this.isProjectedVisible = false;
+            return;
+        }
+
+        this.currentScreenX = (this.projectedPosition.x * 0.5 + 0.5) * this.viewportWidth;
+        this.currentScreenY = (-this.projectedPosition.y * 0.5 + 0.5) * this.viewportHeight;
+        const pulse = Math.sin(timeSeconds * SKIP_BUTTON_PULSE_SPEED) * SKIP_BUTTON_PULSE_AMOUNT;
+        const scale = 1 + pulse;
+        this.currentScreenSize = this.clamp(
             this.viewportWidth * SKIP_BUTTON_PIXEL_RATIO,
             SKIP_BUTTON_MIN_PIXELS,
             SKIP_BUTTON_MAX_PIXELS,
-        );
-    }
-
-    private getWorldSizeForPixels(pixelSize: number) {
-        const distance = Math.max(
-            this.camera.position.distanceTo(this.buttonWorldPosition),
-            0.001,
-        );
-        const fovRadians = THREE.MathUtils.degToRad(this.camera.fov);
-        const visibleHeightAtDistance = 2 * distance * Math.tan(fovRadians * 0.5);
-        const worldUnitsPerPixel =
-            visibleHeightAtDistance /
-            Math.max(this.viewportHeight, 1) /
-            Math.max(this.camera.zoom, 0.001);
-
-        return Math.max(pixelSize * worldUnitsPerPixel, 0.001);
+        ) * scale;
+        this.sprite.position.set(this.currentScreenX, this.currentScreenY);
+        this.sprite.width = this.currentScreenSize;
+        this.sprite.height = this.currentScreenSize;
+        this.sprite.alpha = SKIP_BUTTON_OPACITY;
+        this.sprite.visible = true;
+        this.isProjectedVisible = true;
     }
 
     private isPointerOverButton(screenX: number, screenY: number) {
-        const bounds = this.inputElement.getBoundingClientRect();
-
-        if (bounds.width <= 0 || bounds.height <= 0) {
-            return false;
-        }
-
-        this.normalizedPointer.set(
-            ((screenX - bounds.left) / bounds.width) * 2 - 1,
-            -((screenY - bounds.top) / bounds.height) * 2 + 1,
+        const halfSize = this.currentScreenSize * 0.5;
+        return (
+            screenX >= this.currentScreenX - halfSize &&
+            screenX <= this.currentScreenX + halfSize &&
+            screenY >= this.currentScreenY - halfSize &&
+            screenY <= this.currentScreenY + halfSize
         );
-        this.raycaster.setFromCamera(this.normalizedPointer, this.camera);
-
-        const intersections = this.raycaster.intersectObject(this.buttonMesh, false);
-
-        return intersections.length > 0;
     }
 
     private readonly handlePointerDown = (event: PointerEvent) => {
-        if (!this.isInitialized || this.isDisposed || !this.isVisible) {
+        if (!this.isInitialized || this.isDisposed || !this.isVisible || !this.isProjectedVisible) {
             return;
         }
 
@@ -263,4 +218,8 @@ export class SkipDayUI {
         audioManager.playClick();
         this.onSkipRequested?.();
     };
+
+    private clamp(value: number, min: number, max: number) {
+        return Math.max(min, Math.min(max, value));
+    }
 }

@@ -99,6 +99,10 @@ export class LoaderOverlay {
         this.renderer.autoClear = previousAutoClear;
     }
 
+    isActive() {
+        return !this.isDisposed && this.state !== 'finished';
+    }
+
     updateViewport(width: number, height: number) {
         this.viewportWidth = Math.max(width, 1);
         this.viewportHeight = Math.max(height, 1);

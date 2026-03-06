@@ -1,11 +1,20 @@
 import * as THREE from 'three';
-import { PlantId } from '../Models/PlaceVegetable.model';
+import {
+    Assets,
+    Container,
+    Graphics,
+    Sprite,
+    Text,
+    Texture,
+} from 'pixi.js';
 import type {
     FlyingResourceIcon,
     ResourceDefinition,
     ResourceEntry,
     ResourceGainBatch,
 } from '../Models/FarmResources.model';
+import { PlantId } from '../Models/PlaceVegetable.model';
+import { PixiUI } from '../Systems/PixiUI';
 
 const RESOURCE_DEFINITIONS: readonly ResourceDefinition[] = [
     { id: PlantId.corn, iconPath: 'assets/images/corn.png' },
@@ -13,26 +22,16 @@ const RESOURCE_DEFINITIONS: readonly ResourceDefinition[] = [
     { id: PlantId.strawberry, iconPath: 'assets/images/strawberry.png' },
 ] as const;
 
-const HUD_MARGIN_LEFT = 1;
+const HUD_MARGIN_LEFT = 10;
 const HUD_MARGIN_TOP = 10;
 const ITEM_GAP = 3;
 const ICON_MIN_SIZE = 44;
 const ICON_MAX_SIZE = 64;
 const ICON_SCREEN_RATIO = 0.09;
-const COUNT_WIDTH_RATIO = 0.66;
-const COUNT_HEIGHT_RATIO = 0.42;
 const COUNT_OFFSET_Y_RATIO = -0.3;
 const COUNT_ICON_GAP_PX = 1;
-const COUNT_TEXTURE_WIDTH = 384;
-const COUNT_TEXTURE_HEIGHT = 160;
-const COUNT_TEXT_PREFIX = 'x';
-const COUNT_RENDER_ORDER = 1120;
-const ICON_RENDER_ORDER = 1119;
-const FRAME_RENDER_ORDER = 1118;
-const FLY_ICON_RENDER_ORDER = 1122;
-const FRAME_PADDING_X = 50;
-const FRAME_PADDING_Y = 15;
-const FRAME_TEXTURE_SIZE = 768;
+const FRAME_PADDING_X = 20;
+const FRAME_PADDING_Y = 10;
 const FLY_ICON_SIZE_RATIO = 0.66;
 const FLY_ICON_MIN_SIZE = 26;
 const FLY_ICON_MAX_SIZE = 42;
@@ -48,17 +47,12 @@ const FLY_ICON_ARC_HEIGHT_EXTRA = 38;
 
 export class FarmResourcesUI {
     private readonly inputElement: HTMLElement;
-    private readonly renderer: THREE.WebGLRenderer;
-    private readonly textureLoader = new THREE.TextureLoader();
-    private readonly overlayScene = new THREE.Scene();
-    private readonly overlayCamera = new THREE.OrthographicCamera(0, 1, 0, 1, 0, 10);
-    private readonly flyIconGeometry = new THREE.PlaneGeometry(1, 1);
-    private readonly projectionVector = new THREE.Vector3();
-    private readonly frameTexture: THREE.CanvasTexture;
-    private readonly frameMesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>;
+    private readonly pixiUI: PixiUI;
+    private readonly root = new Container();
+    private readonly frame = new Graphics();
     private readonly entries: ResourceEntry[] = [];
     private readonly flyingIcons: FlyingResourceIcon[] = [];
-
+    private readonly projectionVector = new THREE.Vector3();
     private viewportWidth = 1;
     private viewportHeight = 1;
     private currentIconSize = ICON_MIN_SIZE;
@@ -67,26 +61,15 @@ export class FarmResourcesUI {
     private isDisposed = false;
     private loadPromise: Promise<void> | null = null;
 
-    constructor(inputElement: HTMLElement, renderer: THREE.WebGLRenderer) {
+    constructor(inputElement: HTMLElement, pixiUI: PixiUI) {
         this.inputElement = inputElement;
-        this.renderer = renderer;
-        this.overlayCamera.position.z = 1;
-        this.frameTexture = this.createFrameTexture();
-
-        const frameMaterial = new THREE.MeshBasicMaterial({
-            map: this.frameTexture,
-            transparent: true,
-            opacity: 0.98,
-            depthTest: false,
-            depthWrite: false,
-        });
-        frameMaterial.toneMapped = false;
-        this.frameMesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), frameMaterial);
-        this.frameMesh.renderOrder = FRAME_RENDER_ORDER;
-        this.overlayScene.add(this.frameMesh);
-
-        this.createResourceEntries();
-        this.updateViewport(1, 1);
+        this.pixiUI = pixiUI;
+        this.root.visible = true;
+        this.root.zIndex = 20;
+        this.root.sortableChildren = true;
+        this.frame.zIndex = 0;
+        this.root.addChild(this.frame);
+        this.createEntries();
     }
 
     initialize() {
@@ -99,6 +82,7 @@ export class FarmResourcesUI {
         }
 
         this.isInitialized = true;
+        this.pixiUI.root.addChild(this.root);
         this.updateViewport(
             this.inputElement.clientWidth || window.innerWidth,
             this.inputElement.clientHeight || window.innerHeight,
@@ -114,46 +98,28 @@ export class FarmResourcesUI {
     }
 
     render() {
-        if (!this.isInitialized || this.isDisposed || !this.isVisible) {
-            return;
-        }
-
-        const previousAutoClear = this.renderer.autoClear;
-
-        this.renderer.autoClear = false;
-        this.renderer.clearDepth();
-        this.renderer.render(this.overlayScene, this.overlayCamera);
-        this.renderer.autoClear = previousAutoClear;
+        // Rendered by shared PixiUI.
     }
 
     updateViewport(width: number, height: number) {
         this.viewportWidth = Math.max(width, 1);
         this.viewportHeight = Math.max(height, 1);
-
-        this.overlayCamera.left = -this.viewportWidth * 0.5;
-        this.overlayCamera.right = this.viewportWidth * 0.5;
-        this.overlayCamera.top = this.viewportHeight * 0.5;
-        this.overlayCamera.bottom = -this.viewportHeight * 0.5;
-        this.overlayCamera.updateProjectionMatrix();
-
         this.layoutEntries();
     }
 
     setResourceCount(plantId: PlantId, value: number) {
         const entry = this.entries.find((item) => item.id === plantId);
-
         if (!entry) {
             return;
         }
 
         const nextValue = Math.max(0, Math.round(value));
-
         if (entry.count === nextValue) {
             return;
         }
 
         entry.count = nextValue;
-        this.redrawCountTexture(entry);
+        entry.countLabel.text = `x${entry.count}`;
     }
 
     getResourceCount(plantId: PlantId) {
@@ -167,7 +133,6 @@ export class FarmResourcesUI {
         camera: THREE.Camera,
     ) {
         const rewardAmount = Math.max(0, Math.round(amount));
-
         if (rewardAmount <= 0) {
             return Promise.resolve();
         }
@@ -178,7 +143,7 @@ export class FarmResourcesUI {
         }
 
         if (this.isDisposed) {
-            this.incrementResourceCount(plantId, rewardAmount);
+            this.setResourceCount(plantId, this.getResourceCount(plantId) + rewardAmount);
             return Promise.resolve();
         }
 
@@ -189,51 +154,33 @@ export class FarmResourcesUI {
                 resolve,
             };
             const startPositions = this.buildFlyStartPositions(sourceWorldPositions, camera);
-            const endPosition = new THREE.Vector2(
-                entry.iconMesh.position.x,
-                entry.iconMesh.position.y,
-            );
+            const endX = entry.icon.x;
+            const endY = entry.icon.y;
 
             for (let index = 0; index < rewardAmount; index += 1) {
                 const startBase = startPositions[index % startPositions.length];
-                const start = startBase.clone();
-                start.x += this.randomRange(-FLY_ICON_START_JITTER_X, FLY_ICON_START_JITTER_X);
-                start.y += this.randomRange(-FLY_ICON_START_JITTER_Y, FLY_ICON_START_JITTER_Y);
-
-                const controlY =
-                    Math.max(start.y, endPosition.y) +
-                    FLY_ICON_ARC_HEIGHT_MIN +
-                    this.randomRange(0, FLY_ICON_ARC_HEIGHT_EXTRA);
-                const controlX =
-                    (start.x + endPosition.x) * 0.5 +
-                    this.randomRange(-FLY_ICON_CONTROL_JITTER_X, FLY_ICON_CONTROL_JITTER_X);
-                const flyMaterial = new THREE.MeshBasicMaterial({
-                    map: entry.iconTexture ?? entry.iconMesh.material.map,
-                    transparent: true,
-                    opacity: 0,
-                    depthTest: false,
-                    depthWrite: false,
-                });
-                flyMaterial.toneMapped = false;
-
-                const flyMesh = new THREE.Mesh(this.flyIconGeometry, flyMaterial);
-                flyMesh.renderOrder = FLY_ICON_RENDER_ORDER;
-                flyMesh.visible = false;
-                flyMesh.position.set(start.x, start.y, 0.01);
-                const baseSize = THREE.MathUtils.clamp(
-                    this.currentIconSize * FLY_ICON_SIZE_RATIO,
-                    FLY_ICON_MIN_SIZE,
-                    FLY_ICON_MAX_SIZE,
-                );
-                flyMesh.scale.set(baseSize, baseSize, 1);
-                this.overlayScene.add(flyMesh);
-
+                const startX = startBase.x + this.randomRange(-FLY_ICON_START_JITTER_X, FLY_ICON_START_JITTER_X);
+                const startY = startBase.y + this.randomRange(-FLY_ICON_START_JITTER_Y, FLY_ICON_START_JITTER_Y);
+                const controlY = Math.max(startY, endY) + FLY_ICON_ARC_HEIGHT_MIN + this.randomRange(0, FLY_ICON_ARC_HEIGHT_EXTRA);
+                const controlX = (startX + endX) * 0.5 + this.randomRange(-FLY_ICON_CONTROL_JITTER_X, FLY_ICON_CONTROL_JITTER_X);
+                const icon = new Sprite(entry.iconTexture ?? Texture.WHITE);
+                const baseSize = this.clamp(this.currentIconSize * FLY_ICON_SIZE_RATIO, FLY_ICON_MIN_SIZE, FLY_ICON_MAX_SIZE);
+                icon.anchor.set(0.5, 0.5);
+                icon.position.set(startX, startY);
+                icon.width = baseSize;
+                icon.height = baseSize;
+                icon.alpha = 0;
+                icon.zIndex = 50;
+                this.root.addChild(icon);
                 this.flyingIcons.push({
                     plantId,
-                    mesh: flyMesh,
-                    start,
-                    control: new THREE.Vector2(controlX, controlY),
-                    end: endPosition.clone(),
+                    icon,
+                    startX,
+                    startY,
+                    controlX,
+                    controlY,
+                    endX,
+                    endY,
                     duration: this.randomRange(FLY_ICON_DURATION_MIN, FLY_ICON_DURATION_MAX),
                     delay: index * FLY_ICON_STAGGER + this.randomRange(0, FLY_ICON_DELAY_JITTER),
                     baseSize,
@@ -247,12 +194,7 @@ export class FarmResourcesUI {
 
     setVisible(isVisible: boolean) {
         this.isVisible = isVisible;
-        this.frameMesh.visible = isVisible;
-
-        for (const entry of this.entries) {
-            entry.iconMesh.visible = isVisible;
-            entry.countMesh.visible = isVisible;
-        }
+        this.root.visible = isVisible;
     }
 
     dispose() {
@@ -262,85 +204,36 @@ export class FarmResourcesUI {
 
         this.isDisposed = true;
         this.clearFlyingIcons(false);
-        this.flyIconGeometry.dispose();
-        this.frameMesh.geometry.dispose();
-        this.frameMesh.material.dispose();
-        this.overlayScene.remove(this.frameMesh);
-        this.frameTexture.dispose();
-
-        for (const entry of this.entries) {
-            entry.iconMesh.geometry.dispose();
-            entry.iconMesh.material.dispose();
-            this.overlayScene.remove(entry.iconMesh);
-
-            entry.countMesh.geometry.dispose();
-            entry.countMesh.material.dispose();
-            this.overlayScene.remove(entry.countMesh);
-
-            entry.countTexture.dispose();
-            entry.iconTexture?.dispose();
-        }
-
-        this.entries.length = 0;
+        this.pixiUI.root.removeChild(this.root);
+        this.root.destroy({ children: true });
     }
 
-    private createResourceEntries() {
+    private createEntries() {
         for (const definition of RESOURCE_DEFINITIONS) {
-            const iconMaterial = new THREE.MeshBasicMaterial({
-                color: '#ffffff',
-                transparent: true,
-                opacity: 1,
-                depthTest: false,
-                depthWrite: false,
+            const icon = new Sprite(Texture.WHITE);
+            icon.anchor.set(0.5, 0.5);
+            icon.zIndex = 1;
+            const countLabel = new Text({
+                text: 'x0',
+                style: {
+                    fontFamily: 'Trebuchet MS, Verdana, sans-serif',
+                    fontSize: 30,
+                    fill: '#fff6e6',
+                    fontWeight: '800',
+                    stroke: { color: '#70421d', width: 5 },
+                },
             });
-            iconMaterial.toneMapped = false;
-
-            const iconMesh = new THREE.Mesh(
-                new THREE.PlaneGeometry(1, 1),
-                iconMaterial,
-            );
-            iconMesh.renderOrder = ICON_RENDER_ORDER;
-            this.overlayScene.add(iconMesh);
-
-            const countCanvas = document.createElement('canvas');
-            countCanvas.width = COUNT_TEXTURE_WIDTH;
-            countCanvas.height = COUNT_TEXTURE_HEIGHT;
-            const countContext = countCanvas.getContext('2d');
-            const countTexture = new THREE.CanvasTexture(countCanvas);
-            countTexture.colorSpace = THREE.SRGBColorSpace;
-            countTexture.generateMipmaps = true;
-            countTexture.minFilter = THREE.LinearMipmapLinearFilter;
-            countTexture.magFilter = THREE.LinearFilter;
-
-            const countMaterial = new THREE.MeshBasicMaterial({
-                map: countTexture,
-                transparent: true,
-                opacity: 1,
-                depthTest: false,
-                depthWrite: false,
-            });
-            countMaterial.toneMapped = false;
-
-            const countMesh = new THREE.Mesh(
-                new THREE.PlaneGeometry(1, 1),
-                countMaterial,
-            );
-            countMesh.renderOrder = COUNT_RENDER_ORDER;
-            this.overlayScene.add(countMesh);
-
-            const entry: ResourceEntry = {
+            countLabel.anchor.set(0.5, 0.5);
+            countLabel.zIndex = 2;
+            this.root.addChild(icon);
+            this.root.addChild(countLabel);
+            this.entries.push({
                 id: definition.id,
-                iconMesh,
-                countMesh,
-                countCanvas,
-                countContext,
-                countTexture,
+                icon,
+                countLabel,
                 iconTexture: null,
                 count: 0,
-            };
-
-            this.redrawCountTexture(entry);
-            this.entries.push(entry);
+            });
         }
     }
 
@@ -348,23 +241,14 @@ export class FarmResourcesUI {
         await Promise.all(
             RESOURCE_DEFINITIONS.map(async (definition) => {
                 const entry = this.entries.find((item) => item.id === definition.id);
-
                 if (!entry) {
                     return;
                 }
 
                 try {
-                    const texture = await this.textureLoader.loadAsync(definition.iconPath);
-
-                    texture.colorSpace = THREE.SRGBColorSpace;
-                    texture.minFilter = THREE.LinearMipmapLinearFilter;
-                    texture.magFilter = THREE.LinearFilter;
-                    texture.generateMipmaps = true;
-                    texture.needsUpdate = true;
-
+                    const texture = await Assets.load<Texture>(definition.iconPath);
                     entry.iconTexture = texture;
-                    entry.iconMesh.material.map = texture;
-                    entry.iconMesh.material.needsUpdate = true;
+                    entry.icon.texture = texture;
                 } catch (error) {
                     console.error(`Failed to load farm icon: ${definition.iconPath}`, error);
                 }
@@ -373,141 +257,35 @@ export class FarmResourcesUI {
     }
 
     private layoutEntries() {
-        const iconSize = THREE.MathUtils.clamp(
-            this.viewportWidth * ICON_SCREEN_RATIO,
-            ICON_MIN_SIZE,
-            ICON_MAX_SIZE,
-        );
+        const iconSize = this.clamp(this.viewportWidth * ICON_SCREEN_RATIO, ICON_MIN_SIZE, ICON_MAX_SIZE);
         this.currentIconSize = iconSize;
-        const countWidth = iconSize * COUNT_WIDTH_RATIO;
-        const countHeight = iconSize * COUNT_HEIGHT_RATIO;
+        const countWidth = iconSize * 0.66;
         const groupWidth = iconSize + COUNT_ICON_GAP_PX + countWidth;
         const itemStride = groupWidth + ITEM_GAP;
-        const frameWidth =
-            this.entries.length * itemStride -
-            ITEM_GAP +
-            FRAME_PADDING_X * 2;
+        const frameWidth = this.entries.length * itemStride - ITEM_GAP + FRAME_PADDING_X * 2;
         const frameHeight = iconSize + FRAME_PADDING_Y * 2;
-        const frameCenterX = -this.viewportWidth * 0.5 + HUD_MARGIN_LEFT + frameWidth * 0.5;
-        const frameCenterY = this.viewportHeight * 0.5 - HUD_MARGIN_TOP - frameHeight * 0.5;
-        const startX =
-            frameCenterX -
-            frameWidth * 0.5 +
-            FRAME_PADDING_X +
-            iconSize * 0.5;
-        const iconY = frameCenterY;
+        const frameX = HUD_MARGIN_LEFT;
+        const frameY = HUD_MARGIN_TOP;
 
-        this.frameMesh.position.set(frameCenterX, frameCenterY, -0.01);
-        this.frameMesh.scale.set(frameWidth, frameHeight, 1);
-        this.frameMesh.visible = this.isVisible;
+        this.frame.clear();
+        this.frame.roundRect(frameX, frameY, frameWidth, frameHeight, Math.max(10, frameHeight * 0.2));
+        this.frame.fill({ color: 0xb59875, alpha: 0.9 });
+        this.frame.stroke({ color: 0x947454, alpha: 0.86, width: 2 });
 
+        const startX = frameX + FRAME_PADDING_X + iconSize * 0.5;
+        const iconY = frameY + frameHeight * 0.5;
         for (let index = 0; index < this.entries.length; index += 1) {
             const entry = this.entries[index];
-            const baseX = startX + index * itemStride;
-            const countX =
-                baseX +
-                iconSize * 0.5 +
-                COUNT_ICON_GAP_PX +
-                countWidth * 0.5;
+            const iconX = startX + index * itemStride;
+            const countX = iconX + iconSize * 0.5 + COUNT_ICON_GAP_PX + countWidth * 0.5;
             const countY = iconY + iconSize * COUNT_OFFSET_Y_RATIO;
 
-            entry.iconMesh.position.set(baseX, iconY, 0);
-            entry.iconMesh.scale.set(iconSize, iconSize, 1);
-            entry.iconMesh.visible = this.isVisible;
-
-            entry.countMesh.position.set(countX, countY, 0);
-            entry.countMesh.scale.set(countWidth, countHeight, 1);
-            entry.countMesh.visible = this.isVisible;
+            entry.icon.position.set(iconX, iconY);
+            entry.icon.width = iconSize;
+            entry.icon.height = iconSize;
+            entry.countLabel.position.set(countX, countY);
+            entry.countLabel.style.fontSize = Math.round(iconSize * 0.5);
         }
-    }
-
-    private redrawCountTexture(entry: ResourceEntry) {
-        const context = entry.countContext;
-
-        if (!context) {
-            entry.countTexture.needsUpdate = true;
-            return;
-        }
-
-        const width = entry.countCanvas.width;
-        const height = entry.countCanvas.height;
-
-        context.clearRect(0, 0, width, height);
-        context.textAlign = 'center';
-        context.textBaseline = 'middle';
-        context.font = `800 ${Math.round(height * 0.86)}px "Trebuchet MS", "Verdana", sans-serif`;
-        context.fillStyle = '#fff6e6';
-        context.strokeStyle = 'rgba(112, 66, 29, 0.96)';
-        context.lineJoin = 'round';
-        context.miterLimit = 2;
-        context.lineWidth = Math.max(4, Math.round(height * 0.09));
-        const text = `${COUNT_TEXT_PREFIX}${entry.count}`;
-        const textY = height * 0.56;
-        context.strokeText(text, width * 0.5, textY);
-        context.fillText(text, width * 0.5, textY);
-
-        entry.countTexture.needsUpdate = true;
-    }
-
-    private createFrameTexture() {
-        const canvas = document.createElement('canvas');
-        const context = canvas.getContext('2d');
-
-        canvas.width = FRAME_TEXTURE_SIZE;
-        canvas.height = FRAME_TEXTURE_SIZE;
-
-        const texture = new THREE.CanvasTexture(canvas);
-        texture.colorSpace = THREE.SRGBColorSpace;
-        texture.generateMipmaps = true;
-        texture.minFilter = THREE.LinearMipmapLinearFilter;
-        texture.magFilter = THREE.LinearFilter;
-
-        if (!context) {
-            texture.needsUpdate = true;
-            return texture;
-        }
-
-        const padding = Math.round(canvas.width * 0.07);
-        const x = padding;
-        const y = padding;
-        const width = canvas.width - padding * 2;
-        const height = canvas.height - padding * 2;
-        const radius = Math.round(canvas.width * 0.045);
-        const borderWidth = Math.max(3, Math.round(canvas.width * 0.008));
-
-        this.drawRoundedRect(context, x, y, width, height, radius);
-        context.fillStyle = 'rgba(181, 152, 117, 0.9)';
-        context.fill();
-        context.lineWidth = borderWidth;
-        context.strokeStyle = 'rgba(148, 116, 84, 0.86)';
-        context.stroke();
-
-        texture.needsUpdate = true;
-
-        return texture;
-    }
-
-    private drawRoundedRect(
-        context: CanvasRenderingContext2D,
-        x: number,
-        y: number,
-        width: number,
-        height: number,
-        radius: number,
-    ) {
-        const clampedRadius = Math.max(0, Math.min(radius, Math.min(width, height) * 0.5));
-
-        context.beginPath();
-        context.moveTo(x + clampedRadius, y);
-        context.lineTo(x + width - clampedRadius, y);
-        context.quadraticCurveTo(x + width, y, x + width, y + clampedRadius);
-        context.lineTo(x + width, y + height - clampedRadius);
-        context.quadraticCurveTo(x + width, y + height, x + width - clampedRadius, y + height);
-        context.lineTo(x + clampedRadius, y + height);
-        context.quadraticCurveTo(x, y + height, x, y + height - clampedRadius);
-        context.lineTo(x, y + clampedRadius);
-        context.quadraticCurveTo(x, y, x + clampedRadius, y);
-        context.closePath();
     }
 
     private updateFlyingIcons(deltaSeconds: number) {
@@ -518,39 +296,34 @@ export class FarmResourcesUI {
         const safeDeltaSeconds = Math.max(0, deltaSeconds);
         for (let index = this.flyingIcons.length - 1; index >= 0; index -= 1) {
             const icon = this.flyingIcons[index];
-
             icon.elapsed += safeDeltaSeconds;
             const localElapsed = icon.elapsed - icon.delay;
-
             if (localElapsed <= 0) {
-                icon.mesh.visible = false;
                 continue;
             }
 
-            const duration = Math.max(icon.duration, 0.001);
-            const progress = THREE.MathUtils.clamp(localElapsed / duration, 0, 1);
+            const progress = this.clamp(localElapsed / Math.max(icon.duration, 0.001), 0, 1);
             const pathProgress = this.easeOutCubic(progress);
             const inverse = 1 - pathProgress;
             const x =
-                inverse * inverse * icon.start.x +
-                2 * inverse * pathProgress * icon.control.x +
-                pathProgress * pathProgress * icon.end.x;
+                inverse * inverse * icon.startX +
+                2 * inverse * pathProgress * icon.controlX +
+                pathProgress * pathProgress * icon.endX;
             const y =
-                inverse * inverse * icon.start.y +
-                2 * inverse * pathProgress * icon.control.y +
-                pathProgress * pathProgress * icon.end.y;
+                inverse * inverse * icon.startY +
+                2 * inverse * pathProgress * icon.controlY +
+                pathProgress * pathProgress * icon.endY;
             const scale =
-                icon.baseSize *
-                (1 +
-                    0.22 * Math.sin(progress * Math.PI) +
-                    THREE.MathUtils.lerp(0.08, -0.12, progress));
-            const fadeIn = THREE.MathUtils.clamp(progress / 0.2, 0, 1);
-            const fadeOut = THREE.MathUtils.clamp((1 - progress) / 0.22, 0, 1);
+                1 +
+                0.22 * Math.sin(progress * Math.PI) +
+                this.lerp(0.08, -0.12, progress);
+            const fadeIn = this.clamp(progress / 0.2, 0, 1);
+            const fadeOut = this.clamp((1 - progress) / 0.22, 0, 1);
 
-            icon.mesh.visible = this.isVisible;
-            icon.mesh.position.set(x, y, 0.01);
-            icon.mesh.scale.set(scale, scale, 1);
-            icon.mesh.material.opacity = Math.min(fadeIn, fadeOut) * 0.96;
+            icon.icon.position.set(x, y);
+            icon.icon.width = icon.baseSize * scale;
+            icon.icon.height = icon.baseSize * scale;
+            icon.icon.alpha = Math.min(fadeIn, fadeOut) * 0.96;
 
             if (progress < 1) {
                 continue;
@@ -562,15 +335,14 @@ export class FarmResourcesUI {
 
     private completeFlyingIcon(index: number, icon: FlyingResourceIcon) {
         if (!icon.isRewardApplied) {
-            this.incrementResourceCount(icon.plantId, 1);
+            this.setResourceCount(icon.plantId, this.getResourceCount(icon.plantId) + 1);
             icon.isRewardApplied = true;
         }
 
-        this.overlayScene.remove(icon.mesh);
-        icon.mesh.material.dispose();
+        this.root.removeChild(icon.icon);
+        icon.icon.destroy();
         this.flyingIcons.splice(index, 1);
         icon.batch.pendingIcons = Math.max(0, icon.batch.pendingIcons - 1);
-
         if (icon.batch.pendingIcons <= 0) {
             icon.batch.resolve();
         }
@@ -579,41 +351,28 @@ export class FarmResourcesUI {
     private clearFlyingIcons(shouldApplyPendingRewards: boolean) {
         for (let index = this.flyingIcons.length - 1; index >= 0; index -= 1) {
             const icon = this.flyingIcons[index];
-
             if (shouldApplyPendingRewards && !icon.isRewardApplied) {
-                this.incrementResourceCount(icon.plantId, 1);
+                this.setResourceCount(icon.plantId, this.getResourceCount(icon.plantId) + 1);
                 icon.isRewardApplied = true;
             }
 
-            this.overlayScene.remove(icon.mesh);
-            icon.mesh.material.dispose();
+            this.root.removeChild(icon.icon);
+            icon.icon.destroy();
             icon.batch.pendingIcons = Math.max(0, icon.batch.pendingIcons - 1);
-
             if (icon.batch.pendingIcons <= 0) {
                 icon.batch.resolve();
             }
         }
-
         this.flyingIcons.length = 0;
-    }
-
-    private incrementResourceCount(plantId: PlantId, amount: number) {
-        if (amount === 0) {
-            return;
-        }
-
-        this.setResourceCount(plantId, this.getResourceCount(plantId) + amount);
     }
 
     private buildFlyStartPositions(
         sourceWorldPositions: readonly THREE.Vector3[],
         camera: THREE.Camera,
     ) {
-        const starts: THREE.Vector2[] = [];
-
+        const starts: { x: number; y: number }[] = [];
         for (const worldPosition of sourceWorldPositions) {
-            const projected = this.projectWorldToOverlay(worldPosition, camera);
-
+            const projected = this.projectWorldToScreen(worldPosition, camera);
             if (projected) {
                 starts.push(projected);
             }
@@ -623,17 +382,11 @@ export class FarmResourcesUI {
             return starts;
         }
 
-        return [
-            new THREE.Vector2(
-                this.viewportWidth * 0.08,
-                -this.viewportHeight * 0.18,
-            ),
-        ];
+        return [{ x: this.viewportWidth * 0.08, y: this.viewportHeight * 0.82 }];
     }
 
-    private projectWorldToOverlay(worldPosition: THREE.Vector3, camera: THREE.Camera) {
+    private projectWorldToScreen(worldPosition: THREE.Vector3, camera: THREE.Camera) {
         this.projectionVector.copy(worldPosition).project(camera);
-
         if (
             !Number.isFinite(this.projectionVector.x) ||
             !Number.isFinite(this.projectionVector.y) ||
@@ -643,20 +396,27 @@ export class FarmResourcesUI {
             return null;
         }
 
-        return new THREE.Vector2(
-            this.projectionVector.x * this.viewportWidth * 0.5,
-            this.projectionVector.y * this.viewportHeight * 0.5,
-        );
+        return {
+            x: (this.projectionVector.x * 0.5 + 0.5) * this.viewportWidth,
+            y: (-this.projectionVector.y * 0.5 + 0.5) * this.viewportHeight,
+        };
     }
 
     private randomRange(min: number, max: number) {
         return min + Math.random() * (max - min);
     }
 
-    private easeOutCubic(value: number) {
-        const t = THREE.MathUtils.clamp(value, 0, 1);
-        const inverse = 1 - t;
+    private clamp(value: number, min: number, max: number) {
+        return Math.max(min, Math.min(max, value));
+    }
 
+    private lerp(from: number, to: number, t: number) {
+        return from + (to - from) * this.clamp(t, 0, 1);
+    }
+
+    private easeOutCubic(value: number) {
+        const t = this.clamp(value, 0, 1);
+        const inverse = 1 - t;
         return 1 - inverse * inverse * inverse;
     }
 }
