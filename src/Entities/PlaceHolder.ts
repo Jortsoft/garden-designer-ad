@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { GameConfig } from '../Managers/GameConfig';
+import type { PlaceHolderOptions } from '../Models/PlaceHolder.model';
 import { applyPlaceHolderInteractionShader } from '../Shaders/PlaceHolder.shader';
 
 const PLACEHOLDER_MODEL_PATH = 'assets/gltf/placeholder.glb';
@@ -30,17 +31,22 @@ export class PlaceHolder extends THREE.Group {
     private isLoading = false;
     private interactionTimeSeconds = 0;
 
-    constructor(maxTextureAnisotropy: number) {
+    constructor(maxTextureAnisotropy: number, options: PlaceHolderOptions = {}) {
         super();
-        this.name = 'PlaceHolder';
+        this.name = options.name ?? 'PlaceHolder';
         this.maxTextureAnisotropy = maxTextureAnisotropy;
-        this.position.copy(PLACEHOLDER_POSITION);
-        this.scale.setScalar(Math.max(0.001, PLACEHOLDER_SCALE));
+        const position = options.position ?? PLACEHOLDER_POSITION;
+        const rotationDegrees = options.rotationDegrees ?? PLACEHOLDER_ROTATION_DEGREES;
+        const scale = options.scale ?? PLACEHOLDER_SCALE;
+
+        this.position.set(position.x, position.y, position.z);
+        this.scale.setScalar(Math.max(0.001, scale));
         this.rotation.set(
-            THREE.MathUtils.degToRad(PLACEHOLDER_ROTATION_DEGREES.x),
-            THREE.MathUtils.degToRad(PLACEHOLDER_ROTATION_DEGREES.y),
-            THREE.MathUtils.degToRad(PLACEHOLDER_ROTATION_DEGREES.z),
+            THREE.MathUtils.degToRad(rotationDegrees.x),
+            THREE.MathUtils.degToRad(rotationDegrees.y),
+            THREE.MathUtils.degToRad(rotationDegrees.z),
         );
+        this.visible = options.isVisibleInitially ?? true;
     }
 
     load() {

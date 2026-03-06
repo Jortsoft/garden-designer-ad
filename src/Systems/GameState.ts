@@ -5,11 +5,20 @@ export class GameState {
     isPlantSelectionActive = false;
     isSkipDayCycleActive = false;
     isHarvestAnimationActive = false;
+    isMarketModalOpen = false;
+    isAnimalShopOpen = false;
+    isAnimalHomePlaced = false;
     skipDayPlantId: PlantId | null = null;
     harvestPlantId: PlantId | null = null;
+    money = 0;
 
     isInputFlowBlocked() {
-        return this.isSkipDayCycleActive || this.isHarvestAnimationActive;
+        return (
+            this.isSkipDayCycleActive ||
+            this.isHarvestAnimationActive ||
+            this.isMarketModalOpen ||
+            this.isAnimalShopOpen
+        );
     }
 
     clearHarvestAndSkipTargets() {
@@ -19,5 +28,13 @@ export class GameState {
 
     canActivatePlaceholder() {
         return !this.isInputFlowBlocked() && this.harvestPlantId === null;
+    }
+
+    canActivateAnimalShopPlaceholder() {
+        return (
+            !this.isInputFlowBlocked() &&
+            !this.isAnimalHomePlaced &&
+            this.money > 0
+        );
     }
 }

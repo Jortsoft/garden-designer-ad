@@ -1,8 +1,10 @@
 import type { GameConfigModel } from "../Models/GameConfig.model";
 
 export const GameConfig: GameConfigModel = {
-    debugMode: true,
+    debugMode: false,
     Fps: 60,
+    downloadGameUrl: 'https://www.google.com',
+    gameName: 'GardernMakeOver',
     defaultCameraPosition: {
         x: 0.852,
         y: 1.235,

@@ -1,15 +1,26 @@
 import * as THREE from 'three';
+import { Animal } from '../Entities/Animal';
+import { AnimalHome } from '../Entities/AnimalHome';
 import { Ground } from '../Entities/Ground';
 import { Land } from '../Entities/Land';
+import { Market } from '../Entities/Market';
 import { PlaceHolder } from '../Entities/PlaceHolder';
 import { Vegetable } from '../Entities/Vegetable';
+import { getAnimalPrice, type AnimalId } from '../Models/Animal.model';
+import {
+    MARKET_SELL_PRICE_PER_UNIT,
+    type MarketScreenPoint,
+    type MarketResourceCounts,
+} from '../Models/Market.model';
 import { PlantId } from '../Models/PlaceVegetable.model';
 import type { VegetableGrowthLevel } from '../Models/Vegetable.model';
 import { DebugManager } from './DebugManager';
 import { GroundPlacementDebugManager } from './GroundPlacementDebugManager';
 import { LightingManager } from './LightingManager';
+import { MarketActivationManager } from './MarketActivationManager';
 import { PlaceHolderActivationManager } from './PlaceHolderActivationManager';
 import { PostProcessingManager } from './PostProcessingManager';
+import { TutorialGuideManager } from './TutorialGuideManager';
 import { CameraController } from '../Systems/CameraController';
 import { GameState } from '../Systems/GameState';
 import { PixiUI } from '../Systems/PixiUI';
@@ -18,6 +29,10 @@ import { PlaceVegetablesUI } from '../UI/PlaceVegetablesUI';
 import { SkipDayUI } from '../UI/SkipDayUI';
 import { SickleUI } from '../UI/SickleUI';
 import { FarmResourcesUI } from '../UI/FarmResourcesUI';
+import { AnimalShopUI } from '../UI/AnimalShopUI';
+import { MarketModalUI } from '../UI/MarketModalUI';
+import { EndCardUI } from '../UI/EndCardUI';
+import { GameConfig } from './GameConfig';
 
 const VEGETABLE_MODEL_PATHS_BY_LEVEL: Record<PlantId, Record<VegetableGrowthLevel, string>> = {
     [PlantId.corn]: {
@@ -42,6 +57,12 @@ const PLANTING_CAMERA_MOVE = {
     z: 2.254,
     durationSeconds: 0.55,
 } as const;
+const MARKET_TUTORIAL_CAMERA_MOVE = {
+    x: 1.19,
+    y: 0.565,
+    z: 2.22,
+    durationSeconds: 0.65,
+} as const;
 const SKIP_DAY_DURATION_SECONDS = 3;
 const SKIP_DAY_TIME_SCALE = 5;
 const HARVEST_RESOURCE_GAIN = 6;
@@ -55,14 +76,23 @@ const SKIP_DAY_NIGHT_AMBIENT_INTENSITY_MULTIPLIER = 0.24;
 const SKIP_DAY_NIGHT_EXPOSURE_MULTIPLIER = 0.45;
 const SKIP_DAY_NIGHT_VIGNETTE_BOOST = 0.2;
 const SKIP_DAY_NIGHT_BLEND_POWER = 1.3;
-// Tune skip button position above Land here (x, y, z in world units).
+const END_CARD_DELAY_SECONDS = 3;
+const END_CARD_BLUR_PIXELS = 8;
 const SKIP_BUTTON_WORLD_OFFSET = new THREE.Vector3(0.06, 0.15, 0);
+const ANIMAL_SHOP_PLACEHOLDER_POSITION = new THREE.Vector3(1.092, 0.09, 2.117);
+const ANIMAL_HOME_MODEL_SCALE = 0.02;
+const ANIMAL_MODEL_SCALE = 0.02;
 
 export class WorldManager {
+    private readonly renderer: THREE.WebGLRenderer;
     private readonly root = new THREE.Group();
     private readonly ground: Ground;
     private readonly land: Land;
+    private readonly market: Market;
     private readonly placeHolder: PlaceHolder;
+    private readonly animalShopPlaceHolder: PlaceHolder;
+    private readonly animalHome: AnimalHome;
+    private readonly animal: Animal;
     private readonly vegetables = new Map<PlantId, Vegetable>();
     private readonly windWaveSystem: WindWaveSystem;
     private readonly scene: THREE.Scene;
@@ -72,11 +102,17 @@ export class WorldManager {
     private readonly cameraController: CameraController;
     private readonly debugManager: DebugManager;
     private readonly groundPlacementDebugManager: GroundPlacementDebugManager;
+    private readonly marketActivationManager: MarketActivationManager;
     private readonly placeHolderActivationManager: PlaceHolderActivationManager;
+    private readonly animalShopPlaceHolderActivationManager: PlaceHolderActivationManager;
     private readonly placeVegetablesUI: PlaceVegetablesUI;
+    private readonly animalShopUI: AnimalShopUI;
+    private readonly marketModalUI: MarketModalUI;
     private readonly skipDayUI: SkipDayUI;
     private readonly sickleUI: SickleUI;
     private readonly farmResourcesUI: FarmResourcesUI;
+    private readonly endCardUI: EndCardUI;
+    private readonly tutorialGuideManager: TutorialGuideManager;
     private readonly gameState = new GameState();
     private skipDayElapsedSeconds = 0;
     private skipDayBaseSunX = 0;
@@ -85,6 +121,9 @@ export class WorldManager {
     private skipDayBaseAmbientIntensity = 0;
     private skipDayBaseExposure = 0;
     private skipDayBaseVignetteIntensity = 0;
+    private isEndCardScheduled = false;
+    private endCardDelayElapsedSeconds = 0;
+    private isEndCardVisible = false;
     readonly camera: THREE.PerspectiveCamera;
 
     constructor(
@@ -94,11 +133,31 @@ export class WorldManager {
         pixiUI: PixiUI,
     ) {
         this.scene = scene;
+        this.renderer = renderer;
         this.pixiUI = pixiUI;
         this.camera = new THREE.PerspectiveCamera(55, 1, 0.01, 160);
         this.ground = new Ground(renderer.capabilities.getMaxAnisotropy());
         this.land = new Land(renderer.capabilities.getMaxAnisotropy());
+        this.market = new Market();
         this.placeHolder = new PlaceHolder(renderer.capabilities.getMaxAnisotropy());
+        this.animalShopPlaceHolder = new PlaceHolder(
+            renderer.capabilities.getMaxAnisotropy(),
+            {
+                name: 'AnimalShopPlaceHolder',
+                position: ANIMAL_SHOP_PLACEHOLDER_POSITION,
+                isVisibleInitially: false,
+            },
+        );
+        this.animalHome = new AnimalHome(renderer.capabilities.getMaxAnisotropy(), {
+            position: ANIMAL_SHOP_PLACEHOLDER_POSITION,
+            scale: ANIMAL_HOME_MODEL_SCALE,
+            isVisibleInitially: false,
+        });
+        this.animal = new Animal(renderer.capabilities.getMaxAnisotropy(), {
+            position: ANIMAL_SHOP_PLACEHOLDER_POSITION,
+            scale: ANIMAL_MODEL_SCALE,
+            isVisibleInitially: false,
+        });
         this.windWaveSystem = new WindWaveSystem();
         this.lightingManager = new LightingManager(this.scene);
         this.postProcessingManager = new PostProcessingManager(
@@ -114,22 +173,33 @@ export class WorldManager {
             this.pixiUI,
         );
         this.placeVegetablesUI = new PlaceVegetablesUI(inputElement, this.pixiUI);
+        this.animalShopUI = new AnimalShopUI(inputElement, this.pixiUI);
+        this.marketModalUI = new MarketModalUI(inputElement, this.pixiUI);
         this.skipDayUI = new SkipDayUI(inputElement, this.camera, this.pixiUI);
         this.sickleUI = new SickleUI(inputElement, this.camera, this.pixiUI);
         this.farmResourcesUI = new FarmResourcesUI(inputElement, this.pixiUI);
+        this.endCardUI = new EndCardUI(inputElement, this.pixiUI);
         this.skipDayUI.attachTo(this.land, SKIP_BUTTON_WORLD_OFFSET);
         this.sickleUI.attachTo(this.land, SKIP_BUTTON_WORLD_OFFSET);
         this.placeVegetablesUI.setOnPlantSelected(this.handlePlantSelected);
         this.placeVegetablesUI.setOnPlanRequested(this.handlePlanRequested);
+        this.animalShopUI.setOnCloseRequested(this.handleAnimalShopClosed);
+        this.animalShopUI.setOnBuyRequested(this.handleAnimalShopBuyRequested);
+        this.marketModalUI.setOnCloseRequested(this.handleMarketModalClosed);
+        this.marketModalUI.setOnSellRequested(this.handleMarketSellRequested);
         this.skipDayUI.setOnSkipRequested(this.handleSkipDayRequested);
         this.sickleUI.setOnHarvestRequested(this.handleHarvestRequested);
+        this.endCardUI.setOnDownloadRequested(this.handleDownloadGameRequested);
         this.registerVegetables(renderer.capabilities.getMaxAnisotropy());
         const isInputBlockedByOverlay = (screenX: number, screenY: number) =>
             this.gameState.isInputFlowBlocked() ||
             this.debugManager.isScreenPointBlocked(screenX, screenY) ||
             this.placeVegetablesUI.isScreenPointBlocked(screenX, screenY) ||
+            this.animalShopUI.isScreenPointBlocked(screenX, screenY) ||
+            this.marketModalUI.isScreenPointBlocked(screenX, screenY) ||
             this.skipDayUI.isScreenPointBlocked(screenX, screenY) ||
-            this.sickleUI.isScreenPointBlocked(screenX, screenY);
+            this.sickleUI.isScreenPointBlocked(screenX, screenY) ||
+            this.endCardUI.isScreenPointBlocked(screenX, screenY);
         this.cameraController = new CameraController(
             this.camera,
             inputElement,
@@ -140,6 +210,14 @@ export class WorldManager {
             this.ground,
             inputElement,
             isInputBlockedByOverlay,
+        );
+        this.marketActivationManager = new MarketActivationManager(
+            this.camera,
+            this.market,
+            inputElement,
+            this.handleMarketActivated,
+            isInputBlockedByOverlay,
+            this.gameState,
         );
         this.placeHolderActivationManager = new PlaceHolderActivationManager(
             this.camera,
@@ -152,18 +230,45 @@ export class WorldManager {
                 this.sickleUI.hide();
                 this.placeVegetablesUI.show();
                 this.cameraController.MoveCamera(PLANTING_CAMERA_MOVE);
+                this.tutorialGuideManager.notifyPrimaryPlaceholderActivated();
             },
             isInputBlockedByOverlay,
             this.gameState,
         );
+        this.animalShopPlaceHolderActivationManager = new PlaceHolderActivationManager(
+            this.camera,
+            this.animalShopPlaceHolder,
+            inputElement,
+            this.handleAnimalShopPlaceHolderActivated,
+            (screenX: number, screenY: number) =>
+                isInputBlockedByOverlay(screenX, screenY) ||
+                !this.gameState.canActivateAnimalShopPlaceholder() ||
+                !this.animalShopPlaceHolder.visible,
+            null,
+        );
+        this.tutorialGuideManager = new TutorialGuideManager({
+            camera: this.camera,
+            pixiUI: this.pixiUI,
+            cameraController: this.cameraController,
+            primaryPlaceHolder: this.placeHolder,
+            skipDayAnchor: this.land,
+            skipDayWorldOffset: SKIP_BUTTON_WORLD_OFFSET,
+            marketAnchor: this.market,
+            animalShopPlaceHolder: this.animalShopPlaceHolder,
+            marketCameraMove: MARKET_TUTORIAL_CAMERA_MOVE,
+        });
         this.root.add(this.ground);
         this.root.add(this.land);
+        this.root.add(this.market);
         for (const vegetable of this.vegetables.values()) {
             this.root.add(vegetable);
         }
+        this.root.add(this.animalHome);
+        this.root.add(this.animal);
         this.root.add(this.skipDayUI.getObject3D());
         this.root.add(this.sickleUI.getObject3D());
         this.root.add(this.placeHolder);
+        this.root.add(this.animalShopPlaceHolder);
         this.root.add(this.windWaveSystem);
         this.scene.add(this.camera);
         this.scene.add(this.root);
@@ -178,12 +283,15 @@ export class WorldManager {
         this.debugManager.initialize();
         this.cameraController.initialize();
         this.groundPlacementDebugManager.initialize(this.root);
+        this.marketActivationManager.initialize();
         this.placeHolderActivationManager.initialize();
+        this.animalShopPlaceHolderActivationManager.initialize();
         this.windWaveSystem.initialize();
 
         await Promise.all([
             this.ground.load(),
             this.land.load(),
+            this.market.load(),
         ]);
 
         const landSlotOffsets = this.land.getSlotOffsets();
@@ -194,11 +302,21 @@ export class WorldManager {
         await Promise.all([
             ...Array.from(this.vegetables.values(), (vegetable) => vegetable.load()),
             this.placeHolder.load(),
+            this.animalShopPlaceHolder.load(),
+            this.animalHome.load(),
+            this.animal.load(),
             this.placeVegetablesUI.initialize(),
+            this.animalShopUI.initialize(),
+            this.marketModalUI.initialize(),
             this.skipDayUI.initialize(),
             this.sickleUI.initialize(),
             this.farmResourcesUI.initialize(),
+            this.endCardUI.initialize(),
+            this.tutorialGuideManager.initialize(),
         ]);
+        this.farmResourcesUI.setMoney(this.gameState.money);
+        this.updateAnimalShopAvailability();
+        this.tutorialGuideManager.start();
     }
 
     update(deltaSeconds: number) {
@@ -208,25 +326,37 @@ export class WorldManager {
             this.cameraController.update(simulationDeltaSeconds);
         }
         this.placeHolder.update(simulationDeltaSeconds);
+        this.animalShopPlaceHolder.update(simulationDeltaSeconds);
+        this.animalHome.update(simulationDeltaSeconds);
+        this.animal.update(simulationDeltaSeconds);
         this.windWaveSystem.update(simulationDeltaSeconds);
         this.updateSkipDayCycle(deltaSeconds);
         for (const vegetable of this.vegetables.values()) {
             vegetable.update(simulationDeltaSeconds);
         }
         this.placeVegetablesUI.update(simulationDeltaSeconds);
+        this.animalShopUI.update(deltaSeconds);
+        this.marketModalUI.update(deltaSeconds);
         this.skipDayUI.update(simulationDeltaSeconds);
         this.sickleUI.update(simulationDeltaSeconds);
         this.farmResourcesUI.update(deltaSeconds);
+        this.endCardUI.update(deltaSeconds);
+        this.tutorialGuideManager.update(deltaSeconds);
         this.debugManager.update(deltaSeconds);
+        this.updateEndCardFlow(deltaSeconds);
     }
 
     render() {
         this.postProcessingManager.render();
         this.debugManager.render();
         this.placeVegetablesUI.render();
+        this.animalShopUI.render();
+        this.marketModalUI.render();
         this.skipDayUI.render();
         this.sickleUI.render();
         this.farmResourcesUI.render();
+        this.endCardUI.render();
+        this.tutorialGuideManager.render();
         this.pixiUI.render();
     }
 
@@ -237,33 +367,53 @@ export class WorldManager {
         this.debugManager.updateViewport(width, height);
         this.pixiUI.resize(width, height);
         this.placeVegetablesUI.updateViewport(width, height);
+        this.animalShopUI.updateViewport(width, height);
+        this.marketModalUI.updateViewport(width, height);
         this.skipDayUI.updateViewport(width, height);
         this.sickleUI.updateViewport(width, height);
         this.farmResourcesUI.updateViewport(width, height);
+        this.endCardUI.updateViewport(width, height);
+        this.tutorialGuideManager.updateViewport(width, height);
     }
 
     dispose() {
         this.cameraController.dispose();
         this.groundPlacementDebugManager.dispose();
+        this.marketActivationManager.dispose();
         this.placeHolderActivationManager.dispose();
+        this.animalShopPlaceHolderActivationManager.dispose();
         this.debugManager.dispose();
         this.postProcessingManager.dispose();
         this.lightingManager.dispose();
         this.windWaveSystem.dispose();
+        this.market.dispose();
         this.land.dispose();
+        this.animalHome.dispose();
+        this.animal.dispose();
         for (const vegetable of this.vegetables.values()) {
             vegetable.dispose();
         }
         this.vegetables.clear();
         this.placeHolder.dispose();
+        this.animalShopPlaceHolder.dispose();
         this.placeVegetablesUI.setOnPlantSelected(null);
         this.placeVegetablesUI.setOnPlanRequested(null);
         this.placeVegetablesUI.dispose();
+        this.animalShopUI.setOnCloseRequested(null);
+        this.animalShopUI.setOnBuyRequested(null);
+        this.animalShopUI.dispose();
+        this.marketModalUI.setOnCloseRequested(null);
+        this.marketModalUI.setOnSellRequested(null);
+        this.marketModalUI.dispose();
         this.skipDayUI.setOnSkipRequested(null);
         this.skipDayUI.dispose();
         this.sickleUI.setOnHarvestRequested(null);
         this.sickleUI.dispose();
         this.farmResourcesUI.dispose();
+        this.endCardUI.setOnDownloadRequested(null);
+        this.endCardUI.dispose();
+        this.tutorialGuideManager.dispose();
+        this.clearEndCardBlur();
         this.root.clear();
         this.scene.remove(this.root);
         this.scene.remove(this.camera);
@@ -312,6 +462,7 @@ export class WorldManager {
         this.skipDayUI.setWorldOffset(SKIP_BUTTON_WORLD_OFFSET);
         this.sickleUI.hide();
         this.skipDayUI.show();
+        this.tutorialGuideManager.notifyPlantPlanned();
         this.applyVegetablePlacementState();
         selectedVegetable.playGrowAnimation();
     };
@@ -322,6 +473,7 @@ export class WorldManager {
         }
 
         this.startSkipDayCycle();
+        this.tutorialGuideManager.notifySkipDayRequested();
     };
 
     private readonly handleHarvestRequested = () => {
@@ -366,8 +518,112 @@ export class WorldManager {
                 .finally(() => {
                     this.gameState.isHarvestAnimationActive = false;
                     this.debugManager.setInteractionLocked(false);
+                    this.tutorialGuideManager.notifyHarvestCompleted();
                 });
         });
+    };
+
+    private readonly handleMarketActivated = () => {
+        if (this.gameState.isInputFlowBlocked()) {
+            return;
+        }
+
+        this.gameState.isMarketModalOpen = true;
+        this.debugManager.setInteractionLocked(true);
+        this.marketModalUI.show(this.getCurrentResourceCounts());
+        this.tutorialGuideManager.notifyMarketActivated();
+    };
+
+    private readonly handleAnimalShopPlaceHolderActivated = () => {
+        if (!this.gameState.canActivateAnimalShopPlaceholder()) {
+            return;
+        }
+
+        this.gameState.isAnimalShopOpen = true;
+        this.debugManager.setInteractionLocked(true);
+        this.animalShopUI.setMoney(this.gameState.money);
+        this.animalShopUI.show();
+        this.tutorialGuideManager.notifyAnimalShopPlaceholderActivated();
+    };
+
+    private readonly handleAnimalShopClosed = () => {
+        this.gameState.isAnimalShopOpen = false;
+        this.debugManager.setInteractionLocked(false);
+    };
+
+    private readonly handleAnimalShopBuyRequested = (animalId: AnimalId) => {
+        if (!this.gameState.isAnimalShopOpen || this.gameState.isAnimalHomePlaced) {
+            return;
+        }
+
+        const animalPrice = getAnimalPrice(animalId);
+        if (this.gameState.money < animalPrice) {
+            this.animalShopUI.setMoney(this.gameState.money);
+            return;
+        }
+
+        this.gameState.money -= animalPrice;
+        this.farmResourcesUI.setMoney(this.gameState.money);
+        this.gameState.isAnimalHomePlaced = true;
+        const animalSpawnPosition = this.animalShopPlaceHolder.position;
+        this.animalHome.position.copy(animalSpawnPosition);
+        this.animal.position.copy(animalSpawnPosition);
+        this.animal.setSelectedAnimal(animalId);
+        this.animalHome.playSpawnAnimation();
+        this.animal.playSpawnAnimation(0.08);
+        this.scheduleEndCard();
+        this.updateAnimalShopAvailability();
+    };
+
+    private readonly handleMarketModalClosed = () => {
+        this.gameState.isMarketModalOpen = false;
+        this.debugManager.setInteractionLocked(false);
+        this.tutorialGuideManager.notifyMarketClosed(this.animalShopPlaceHolder.visible);
+    };
+
+    private readonly handleMarketSellRequested = (
+        selection: Readonly<MarketResourceCounts>,
+        _totalUnits: number,
+        _totalMoney: number,
+        sourceScreenPoint: Readonly<MarketScreenPoint>,
+    ) => {
+        if (!this.gameState.isMarketModalOpen) {
+            return;
+        }
+
+        let totalSoldUnits = 0;
+        for (const plantId of Object.values(PlantId)) {
+            const requestedUnits = Math.max(0, Math.round(selection[plantId] ?? 0));
+
+            if (requestedUnits <= 0) {
+                continue;
+            }
+
+            const currentUnits = this.farmResourcesUI.getResourceCount(plantId);
+            const unitsToSell = Math.min(requestedUnits, currentUnits);
+
+            if (unitsToSell <= 0) {
+                continue;
+            }
+
+            this.farmResourcesUI.setResourceCount(plantId, currentUnits - unitsToSell);
+            totalSoldUnits += unitsToSell;
+        }
+
+        if (totalSoldUnits <= 0) {
+            this.marketModalUI.setAvailableResources(this.getCurrentResourceCounts());
+            return;
+        }
+
+        const gainedMoney = totalSoldUnits * MARKET_SELL_PRICE_PER_UNIT;
+        this.gameState.money += gainedMoney;
+        void this.farmResourcesUI.playMoneyGainAnimation(
+            gainedMoney,
+            sourceScreenPoint,
+            totalSoldUnits,
+        );
+        this.marketModalUI.setAvailableResources(this.getCurrentResourceCounts());
+        this.updateAnimalShopAvailability();
     };
 
     private applyVegetablePlacementState() {
@@ -381,6 +637,24 @@ export class WorldManager {
 
             vegetable.setShown(isSelectedPlant);
             vegetable.setPreviewMode(isInSelectionPreview);
+        }
+    }
+
+    private getCurrentResourceCounts(): MarketResourceCounts {
+        return {
+            [PlantId.corn]: this.farmResourcesUI.getResourceCount(PlantId.corn),
+            [PlantId.grape]: this.farmResourcesUI.getResourceCount(PlantId.grape),
+            [PlantId.strawberry]: this.farmResourcesUI.getResourceCount(PlantId.strawberry),
+        };
+    }
+
+    private updateAnimalShopAvailability() {
+        const hasAnimalShopAccess =
+            this.gameState.money > 0 &&
+            !this.gameState.isAnimalHomePlaced;
+        this.animalShopPlaceHolder.visible = hasAnimalShopAccess;
+        if (!hasAnimalShopAccess) {
+            this.animalShopUI.hide(this.gameState.isAnimalShopOpen);
         }
     }
 
@@ -517,5 +791,44 @@ export class WorldManager {
         }
 
         return SKIP_DAY_TIME_SCALE;
+    }
+
+    private readonly handleDownloadGameRequested = () => {
+        window.location.href = GameConfig.downloadGameUrl;
+    };
+
+    private scheduleEndCard() {
+        if (this.isEndCardScheduled || this.isEndCardVisible) {
+            return;
+        }
+
+        this.isEndCardScheduled = true;
+        this.endCardDelayElapsedSeconds = 0;
+    }
+
+    private updateEndCardFlow(deltaSeconds: number) {
+        if (!this.isEndCardScheduled || this.isEndCardVisible) {
+            return;
+        }
+
+        this.endCardDelayElapsedSeconds = Math.min(
+            this.endCardDelayElapsedSeconds + Math.max(0, deltaSeconds),
+            END_CARD_DELAY_SECONDS,
+        );
+
+        if (this.endCardDelayElapsedSeconds < END_CARD_DELAY_SECONDS) {
+            return;
+        }
+
+        this.isEndCardScheduled = false;
+        this.isEndCardVisible = true;
+        this.endCardUI.show();
+        this.renderer.domElement.style.transition = 'filter 260ms ease';
+        this.renderer.domElement.style.filter = `blur(${END_CARD_BLUR_PIXELS}px)`;
+    }
+
+    private clearEndCardBlur() {
+        this.renderer.domElement.style.filter = '';
+        this.renderer.domElement.style.transition = '';
     }
 }

@@ -1,6 +1,8 @@
 export interface GameConfigModel {
     debugMode: boolean;
     Fps: number;
+    downloadGameUrl: string;
+    gameName: string;
     defaultCameraPosition: {
         x: number;
         y: number;

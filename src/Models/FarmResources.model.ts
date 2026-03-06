@@ -14,6 +14,18 @@ export interface ResourceEntry {
     count: number;
 }
 
+export interface MoneyDisplayState {
+    readonly icon: Sprite;
+    readonly countLabel: Text;
+    iconTexture: Texture | null;
+    amount: number;
+}
+
+export interface UIScreenPoint {
+    x: number;
+    y: number;
+}
+
 export interface ResourceGainBatch {
     readonly plantId: PlantId;
     pendingIcons: number;
@@ -33,6 +45,28 @@ export interface FlyingResourceIcon {
     readonly delay: number;
     readonly baseSize: number;
     readonly batch: ResourceGainBatch;
+    elapsed: number;
+    isRewardApplied: boolean;
+}
+
+export interface MoneyGainBatch {
+    pendingIcons: number;
+    resolve: () => void;
+}
+
+export interface FlyingMoneyIcon {
+    readonly icon: Sprite;
+    readonly startX: number;
+    readonly startY: number;
+    readonly controlX: number;
+    readonly controlY: number;
+    readonly endX: number;
+    readonly endY: number;
+    readonly duration: number;
+    readonly delay: number;
+    readonly baseSize: number;
+    readonly rewardAmount: number;
+    readonly batch: MoneyGainBatch;
     elapsed: number;
     isRewardApplied: boolean;
 }
