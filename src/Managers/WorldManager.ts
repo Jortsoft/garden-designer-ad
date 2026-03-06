@@ -21,6 +21,7 @@ import { MarketActivationManager } from './MarketActivationManager';
 import { PlaceHolderActivationManager } from './PlaceHolderActivationManager';
 import { PostProcessingManager } from './PostProcessingManager';
 import { TutorialGuideManager } from './TutorialGuideManager';
+import { audioManager } from './AudioManager';
 import { CameraController } from '../Systems/CameraController';
 import { GameState } from '../Systems/GameState';
 import { PixiUI } from '../Systems/PixiUI';
@@ -320,6 +321,12 @@ export class WorldManager {
     }
 
     update(deltaSeconds: number) {
+        if (this.isEndCardVisible) {
+            this.endCardUI.update(deltaSeconds);
+            this.debugManager.update(deltaSeconds);
+            return;
+        }
+
         const simulationDeltaSeconds = deltaSeconds * this.getSimulationTimeScale();
 
         if (!this.gameState.isInputFlowBlocked()) {
@@ -571,6 +578,7 @@ export class WorldManager {
         this.animal.setSelectedAnimal(animalId);
         this.animalHome.playSpawnAnimation();
         this.animal.playSpawnAnimation(0.08);
+        audioManager.playAnimal(animalId);
         this.scheduleEndCard();
         this.updateAnimalShopAvailability();
     };
@@ -794,6 +802,7 @@ export class WorldManager {
     }
 
     private readonly handleDownloadGameRequested = () => {
+        this.clearEndCardBlur();
         window.location.href = GameConfig.downloadGameUrl;
     };
 
@@ -822,6 +831,7 @@ export class WorldManager {
 
         this.isEndCardScheduled = false;
         this.isEndCardVisible = true;
+        this.debugManager.setInteractionLocked(true);
         this.endCardUI.show();
         this.renderer.domElement.style.transition = 'filter 260ms ease';
         this.renderer.domElement.style.filter = `blur(${END_CARD_BLUR_PIXELS}px)`;

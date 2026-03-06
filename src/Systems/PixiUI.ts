@@ -86,6 +86,9 @@ export class PixiUI {
 
         this.isDisposed = true;
         this.root.removeChildren();
+        if (this.view && this.view.parentElement === this.container) {
+            this.container.removeChild(this.view);
+        }
         this.app.destroy();
         this.view = null;
     }

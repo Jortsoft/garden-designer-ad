@@ -3,6 +3,7 @@ import type {
     AudioClipId,
     AudioPoolState,
 } from '../Models/Audio.model';
+import { AnimalId, type AnimalId as AnimalIdType } from '../Models/Animal.model';
 
 const AUDIO_CLIP_CONFIG: Record<AudioClipId, AudioClipConfig> = {
     click: {
@@ -13,6 +14,16 @@ const AUDIO_CLIP_CONFIG: Record<AudioClipId, AudioClipConfig> = {
     harvest: {
         path: 'assets/sounds/throw_spear.mp3',
         poolSize: 3,
+        volume: 1,
+    },
+    chicken: {
+        path: 'assets/sounds/chicken.mp3',
+        poolSize: 2,
+        volume: 1,
+    },
+    cow: {
+        path: 'assets/sounds/cow.mp3',
+        poolSize: 2,
         volume: 1,
     },
 } as const;
@@ -41,6 +52,10 @@ export class AudioManager {
 
     playHarvest() {
         this.play('harvest');
+    }
+
+    playAnimal(animalId: AnimalIdType) {
+        this.play(animalId === AnimalId.cow ? 'cow' : 'chicken');
     }
 
     private getOrCreatePool(clipId: AudioClipId) {

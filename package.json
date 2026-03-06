@@ -6,7 +6,6 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "build-offline": "tsc && vite build --config vite.offline.config.ts && node scripts/write-offline-html.mjs",
     "preview": "vite preview"
   },
   "devDependencies": {

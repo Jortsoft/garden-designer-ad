@@ -1,4 +1,4 @@
-export type AudioClipId = 'click' | 'harvest';
+export type AudioClipId = 'click' | 'harvest' | 'chicken' | 'cow';
 
 export interface AudioClipConfig {
     readonly path: string;
